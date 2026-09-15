@@ -13,6 +13,8 @@
 """
 from __future__ import annotations
 
+import heapq
+
 
 class SequenceGapError(RuntimeError):
     """diff 이벤트 시퀀스가 끊김 — 로컬 오더북을 신뢰할 수 없음."""
@@ -97,8 +99,9 @@ class LocalOrderBook:
         return p, self.asks[p]
 
     def top(self, n: int = 10) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
-        bids = sorted(self.bids.items(), key=lambda x: -x[0])[:n]
-        asks = sorted(self.asks.items(), key=lambda x: x[0])[:n]
+        # 100ms 마다 호출되므로 전체 정렬 대신 O(레벨수) 부분 선택
+        bids = heapq.nlargest(n, self.bids.items(), key=lambda x: x[0])
+        asks = heapq.nsmallest(n, self.asks.items(), key=lambda x: x[0])
         return bids, asks
 
     def is_crossed(self) -> bool:

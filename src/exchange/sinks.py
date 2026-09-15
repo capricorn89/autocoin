@@ -60,6 +60,25 @@ class JsonlSink:
         self._handles.clear()
 
 
+class FanoutSink:
+    """여러 싱크에 같은 레코드를 전달 (예: DB + 원본 JSONL)."""
+
+    def __init__(self, sinks: list):
+        self.sinks = list(sinks)
+
+    def write(self, record: dict) -> None:
+        for s in self.sinks:
+            s.write(record)
+
+    def flush(self) -> None:
+        for s in self.sinks:
+            s.flush()
+
+    def close(self) -> None:
+        for s in self.sinks:
+            s.close()
+
+
 class MemorySink:
     """테스트용."""
 

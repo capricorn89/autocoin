@@ -63,8 +63,10 @@ class CollectorConfig:
     trade_route: str = "/market"
     depth_speed: str = "100ms"        # 100ms / 250ms / 500ms
     snapshot_limit: int = 1000
-    stale_timeout: float = 10.0        # depth 연결
-    trade_stale_timeout: float = 60.0  # 체결은 저유동 종목에서 수십 초 비는 게 정상
+    top_levels: int = 5                # 상위 N호가가 바뀔 때마다 book_top 레코드 발행 (0 = 끔)
+    # EWYUSDT 는 24/7 거래되지만 주말 새벽(KST) 무체결 분이 최대 16% (1m봉 2026-03~08 분석).
+    stale_timeout: float = 30.0         # depth 연결
+    trade_stale_timeout: float = 300.0  # 체결 연결 — 저유동 구간 오탐 재연결 방지
     ping_interval: float = 20.0
     ping_timeout: float = 20.0
     max_session_seconds: float = 23 * 3600
@@ -200,6 +202,7 @@ class OrderBookCollector:
         self.books = {s.upper(): BookSynchronizer(s.upper(), fetch_snapshot, self.sink.write, clock)
                       for s in cfg.symbols}
         self._last_agg_id: dict[str, int] = {}
+        self._last_top: dict[str, tuple] = {}
         self.stats: Counter = Counter()
 
     # ---- 메인 루프 ----
@@ -236,6 +239,7 @@ class OrderBookCollector:
                 if name == "depth":   # 끊긴 동안의 diff 는 복구 불가 → 오더북 무효화 후 재동기화
                     for b in self.books.values():
                         b.reset()
+                    self._last_top.clear()
 
             if stop.is_set():
                 break
@@ -281,13 +285,28 @@ class OrderBookCollector:
         if etype == "depthUpdate" and sym in self.books:
             self.stats[f"{sym}.depth"] += 1
             self.sink.write({"kind": "depth", "symbol": sym, "recv_ts": recv_ts, **data})
-            self.books[sym].on_diff(data)
+            sync = self.books[sym]
+            sync.on_diff(data)
+            if self.cfg.top_levels and sync.synced and sync.book.ready:
+                self._emit_top(sym, sync.book, data, recv_ts)
         elif etype == "aggTrade" and sym in self.books:
             self.stats[f"{sym}.trade"] += 1
             self.sink.write({"kind": "trade", "symbol": sym, "recv_ts": recv_ts, **data})
             self._check_trade_seq(sym, data, recv_ts)
         else:
             log.debug("미처리 메시지: %s", str(msg)[:200])
+
+    def _emit_top(self, sym: str, book: LocalOrderBook, event: dict, recv_ts: int) -> None:
+        """상위 N호가(가격·수량)가 직전 발행과 다를 때만 book_top 레코드 발행."""
+        bids, asks = book.top(self.cfg.top_levels)
+        key = (tuple(bids), tuple(asks))
+        if self._last_top.get(sym) == key:
+            return
+        self._last_top[sym] = key
+        self.stats[f"{sym}.book_top"] += 1
+        self.sink.write({"kind": "book_top", "symbol": sym, "recv_ts": recv_ts,
+                         "E": event.get("E"), "T": event.get("T"), "u": book.last_update_id,
+                         "bids": [list(x) for x in bids], "asks": [list(x) for x in asks]})
 
     def _check_trade_seq(self, sym: str, data: dict, recv_ts: int) -> None:
         a = data.get("a")

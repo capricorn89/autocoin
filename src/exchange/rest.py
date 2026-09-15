@@ -132,3 +132,17 @@ class FuturesRestClient:
             return float(headers.get("Retry-After"))
         except (TypeError, ValueError):
             return self._backoff(attempt)
+
+
+def measure_clock_offset(client: FuturesRestClient, samples: int = 5) -> dict:
+    """로컬 시계 - 서버 시계 (ms). 왕복 중간 시점 기준, 표본 중앙값. +면 로컬이 빠름."""
+    offsets, rtts = [], []
+    for _ in range(samples):
+        t0 = time.time()
+        server_ms = client.get("/fapi/v1/time")["serverTime"]
+        t1 = time.time()
+        rtts.append((t1 - t0) * 1000)
+        offsets.append((t0 + t1) / 2 * 1000 - server_ms)
+    offsets.sort()
+    return {"offset_ms": round(offsets[len(offsets) // 2], 1), "rtt_ms": round(min(rtts), 1),
+            "samples": samples}

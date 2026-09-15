@@ -110,6 +110,31 @@ def test_trade_gap_recorded():
     assert len(sink.of_kind("trade")) == 3
 
 
+def test_book_top_emitted_only_when_top_levels_change():
+    async def scenario():
+        sink = MemorySink()
+        snap = {"lastUpdateId": 100,
+                "bids": [[str(100 - i), "1"] for i in range(7)],     # 100..94
+                "asks": [[str(101 + i), "1"] for i in range(7)]}     # 101..107
+        fetch, _ = _fetcher([snap])
+        col = OrderBookCollector(CollectorConfig(symbols=["EWYUSDT"], top_levels=5), sink,
+                                 fetch_snapshot=fetch)
+        col.handle_message(_depth("EWYUSDT", 99, 101, 98))            # 버퍼링 → 동기화
+        await asyncio.sleep(0.01)
+        assert not sink.of_kind("book_top")
+        col.handle_message(_depth("EWYUSDT", 102, 102, 101, b=[["94", "5"]]))  # 첫 발행
+        col.handle_message(_depth("EWYUSDT", 103, 103, 102, b=[["93", "2"]]))  # 6호가 밖 → 발행 안 함
+        col.handle_message(_depth("EWYUSDT", 104, 104, 103, b=[["98", "7"]]))  # 3호가 수량 변경 → 발행
+        col.handle_message(_depth("EWYUSDT", 105, 105, 104, b=[["98", "7"]]))  # 동일 → 발행 안 함
+        tops = sink.of_kind("book_top")
+        assert len(tops) == 2
+        assert tops[-1]["bids"][0] == [100.0, 1.0] and tops[-1]["bids"][2] == [98.0, 7.0]
+        assert len(tops[-1]["bids"]) == 5 and tops[-1]["asks"][0] == [101.0, 1.0]
+        assert tops[-1]["u"] == 104
+
+    asyncio.run(scenario())
+
+
 def test_stale_stream_reconnects_and_resets_books():
     async def scenario():
         sink = MemorySink()
