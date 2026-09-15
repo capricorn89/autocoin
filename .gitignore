@@ -1,0 +1,18 @@
+# 시크릿 — .env.example 만 커밋
+.env
+.env.*
+!.env.example
+
+# 환경/캐시
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.idea/
+.DS_Store
+.claude/settings.local.json
+
+# 데이터/산출물 (용량·재생성 가능)
+data/
+results/
+legacy/straddle/results/

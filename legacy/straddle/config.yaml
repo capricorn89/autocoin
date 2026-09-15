@@ -1,0 +1,40 @@
+# EWYUSDT 양매수(롱 스트래들) 복제 전략 설정
+# 모든 값은 백테스트/라이브에서 동일하게 사용됩니다.
+
+symbol: EWYUSDT
+
+# --- 행사가(스트래들) 기준 ---
+strike_time: "15:30"          # 매일 이 시각의 가격을 행사가 K로 사용(진입)
+expiry_time: "15:30"          # 만기 시각. 만기와 동시에 다음 사이클 롤
+expiry_offset_days: 1         # 만기일 = 진입일 + 이 값. 1 = 1DTE(익일 15:30 만기·롤)
+strike_timezone: "Asia/Seoul" # 기준 타임존 (KST). 다른 시점/존으로 변경 가능
+
+# --- 매매 빈도 ---
+rebalance_interval: "5m"      # 리밸런싱(매매) 주기: 1m / 5m / 15m / 1h / 4h ...
+rebalance_band: 0.0           # |목표델타-현재포지션| 이 값 초과 시에만 거래(0 = 항상)
+
+# --- 변동성 (블랙숄즈 델타용) ---
+vol_mode: "realized"          # realized = 과거 추정 / fixed = 상수
+vol_value: 0.6                # fixed일 때 연율 변동성
+vol_window: 20                # realized일 때 추정 윈도(거래일 수)
+
+# --- 옵션/리스크 파라미터 ---
+risk_free_rate: 0.0
+contracts: 1                  # 스트래들 계약수(포지션 스케일)
+tau_floor: 0.0001141553       # 1/(365*24): 만기 근접 특이점 방지용 τ 하한(약 1시간)
+
+# --- 비용/체결 ---
+taker_fee_bps: 5.0            # 편도 수수료 (basis points)
+slippage_bps: 1.0            # 페이퍼 체결 슬리피지 (basis points)
+
+# --- 백테스트 ---
+backtest:
+  interval: "1m"             # 데이터 해상도(가격/사이클 판정)
+  start: null                # null = 상장일(자동). "2026-04-01" 등 지정 가능
+  end: null                  # null = 현재
+
+# --- 실행 ---
+execution:
+  mode: "paper"              # paper = 시뮬 / live = 실주문(API 키 필요)
+  poll_seconds: 15          # 라이브 가격 폴링 주기(초)
+  state_file: "legacy/straddle/results/live_state.json"
