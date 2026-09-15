@@ -161,8 +161,7 @@ def register_experiment_in_index(note: Path, summary: str, root: Path | None = N
     heading = "## 최근 실험"
     if heading in text:
         head, tail = text.split(heading, 1)
-        text = f"{head}{heading}\n\n{line}{tail if tail.startswith(chr(10) * 2) else chr(10) + tail}"
-        text = text.replace(f"{line}\n\n\n", f"{line}\n")
+        text = f"{head}{heading}\n\n{line}\n{tail.lstrip(chr(10))}"
     else:
         text = text.rstrip() + f"\n\n{heading}\n\n{line}\n"
     index.write_text(text, encoding="utf-8")

@@ -78,4 +78,4 @@ def test_register_experiment_in_index(vault):
     note = vault / "02-experiments" / "2026-09-16_new.md"
     obsidian.register_experiment_in_index(note, "요약", root=vault)
     text = (vault / "00-index.md").read_text(encoding="utf-8")
-    assert text.index("[[2026-09-16_new]] — 요약") < text.index("[[old]]") < text.index("## 설계 결정")
+    assert "## 최근 실험\n\n- [[2026-09-16_new]] — 요약\n- [[old]] — 이전\n\n## 설계 결정" in text
