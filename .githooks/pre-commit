@@ -1,0 +1,18 @@
+#!/bin/sh
+# 시크릿 커밋 차단 훅.  활성화: git config core.hooksPath .githooks
+fail() { echo "✋ pre-commit: $1" >&2; echo "   시크릿은 ~/.config/autocoin/.env 에서 관리하세요." >&2; exit 1; }
+
+# 1) env/키 파일 자체
+bad_files=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '(^|/)(\.env(\..*)?|.*\.(pem|key|p12))$' | grep -vE '\.env\.example$')
+[ -n "$bad_files" ] && fail "env/키 파일은 커밋할 수 없습니다: $bad_files"
+
+added=$(git diff --cached -U0 --diff-filter=ACMR -- . ':(exclude).githooks/*' | grep -E '^\+[^+]')
+
+# 2) KEY/SECRET/TOKEN = 긴 값
+echo "$added" | grep -Ei '(api[_-]?key|secret|token|password)[A-Za-z_]*[[:space:]]*[=:][[:space:]]*["'"'"']?[A-Za-z0-9/+_-]{16,}' >/dev/null \
+  && fail "키/시크릿으로 보이는 할당이 있습니다"
+
+# 3) Binance 형식(대소문자 섞인 64자 영숫자) 문자열
+echo "$added" | grep -oE '[A-Za-z0-9]{64}' | grep '[A-Z]' | grep '[a-z]' | grep -q '[0-9]' \
+  && fail "Binance API 키 형식의 문자열이 있습니다"
+exit 0

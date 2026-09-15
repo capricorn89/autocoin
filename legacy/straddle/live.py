@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import signal
 import time
 from datetime import datetime, timezone
@@ -24,18 +23,6 @@ from src.config import Config, load_config
 from .strategy import StraddleReplicator
 
 _RUNNING = True
-
-
-def _load_env(path=".env"):
-    p = Path(path)
-    if not p.exists():
-        return
-    for line in p.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, v = line.split("=", 1)
-        os.environ.setdefault(k.strip(), v.strip())
 
 
 def _current_sigma(cfg: Config) -> float:
@@ -100,7 +87,6 @@ def _stop(*_):
 
 
 def run_live(cfg: Config, paper: bool = True, once: bool = False):
-    _load_env()
     signal.signal(signal.SIGINT, _stop)
     signal.signal(signal.SIGTERM, _stop)
 
@@ -111,8 +97,9 @@ def run_live(cfg: Config, paper: bool = True, once: bool = False):
         mode = "PAPER(시뮬)"
     else:
         from .broker import BinanceBroker
-        broker = BinanceBroker(cfg.symbol, os.getenv("BINANCE_API_KEY"),
-                               os.getenv("BINANCE_API_SECRET"))
+        from src.exchange.auth import BinanceCredentials  # 저장소 밖 ~/.config/autocoin/.env
+        creds = BinanceCredentials.from_env()
+        broker = BinanceBroker(cfg.symbol, creds.api_key, creds.api_secret)
         mode = "LIVE(실주문)"
 
     print(f"=== 라이브 엔진 시작 [{mode}] {cfg.symbol} ===")

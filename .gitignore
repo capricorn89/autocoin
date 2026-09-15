@@ -16,3 +16,6 @@ __pycache__/
 data/
 results/
 legacy/straddle/results/
+
+# 로그
+logs/

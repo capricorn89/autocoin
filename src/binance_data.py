@@ -11,7 +11,8 @@ import time as _time
 from pathlib import Path
 
 import pandas as pd
-import requests
+
+from .exchange.rest import FuturesRestClient
 
 FAPI = "https://fapi.binance.com"
 _INTERVAL_MS = {
@@ -26,20 +27,15 @@ _KLINE_COLS = [
 ]
 
 
+_CLIENT: FuturesRestClient | None = None
+
+
 def _request(path: str, params: dict) -> list:
-    for attempt in range(5):
-        try:
-            r = requests.get(FAPI + path, params=params, timeout=20)
-            if r.status_code == 429:
-                _time.sleep(2 * (attempt + 1))
-                continue
-            r.raise_for_status()
-            return r.json()
-        except requests.RequestException:
-            if attempt == 4:
-                raise
-            _time.sleep(1.5 * (attempt + 1))
-    return []
+    """공개 REST 조회. 재시도/rate-limit 처리는 exchange.rest.FuturesRestClient 에 위임."""
+    global _CLIENT
+    if _CLIENT is None:
+        _CLIENT = FuturesRestClient(base_url=FAPI)
+    return _CLIENT.get(path, params)
 
 
 def get_onboard_date(symbol: str) -> int | None:
