@@ -12,21 +12,8 @@ KRX 주식 알고리즘 매매 시스템의 선행 검증용 테스트베드. �
 ```bash
 uv venv --python 3.13 .venv
 uv pip install --python .venv/bin/python -r requirements.txt -r requirements-dev.txt
-git config core.hooksPath .githooks   # 시크릿 커밋 차단 훅
+git config core.hooksPath .githooks
 ```
-
-## 시크릿
-
-API 키는 **저장소 밖** `~/.config/autocoin/.env`(권한 600)에서만 관리한다.
-
-```
-BINANCE_API_KEY=...
-BINANCE_API_SECRET=...
-```
-
-- 위치 변경: `AUTOCOIN_ENV_FILE` 환경변수. 저장소 안 경로를 지정하면 코드가 로드를 거부한다
-- `.githooks/pre-commit`이 env/키 파일, 키 형태 할당, Binance 키 형식 문자열의 커밋을 막는다
-- 비밀이 아닌 설정(`OBSIDIAN_AUTOJI_PATH`)은 셸 프로필에 둔다 — `.env.example` 참고
 
 ## 오더북/체결 수집 (M1)
 
