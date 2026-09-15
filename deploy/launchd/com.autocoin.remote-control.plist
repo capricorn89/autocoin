@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  autocoin 프로젝트 Claude Code Remote Control 서버 (claude.ai/code · Claude 모바일 앱에서 접속).
+
+  사전 조건 (1회, 사용자가 터미널에서 직접):
+    cd ~/Desktop/autocoin && claude remote-control
+    → "Enable Remote Control? (y/n)" 에 y → 동작 확인 후 Ctrl+C
+    (launchd 에는 터미널이 없어 이 동의 질문에 답할 수 없음)
+
+  설치: cp deploy/launchd/com.autocoin.remote-control.plist ~/Library/LaunchAgents/
+        launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.autocoin.remote-control.plist
+  중지: launchctl bootout gui/$(id -u)/com.autocoin.remote-control
+
+  - 서버 모드는 네트워크가 약 10분 끊기면 종료 → KeepAlive 로 60초 후 재시작
+  - 잠자기 방지는 수집기(com.autocoin.collector)의 caffeinate -s 가 담당 (AC 전원 연결 중)
+  - 권한 모드는 기본값: 파일 수정·명령 실행 승인 요청이 폰/웹으로 옴
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.autocoin.remote-control</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/woojin/.local/bin/claude</string>
+        <string>remote-control</string>
+        <string>--name</string>
+        <string>autocoin</string>
+        <string>--spawn</string>
+        <string>same-dir</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/woojin/Desktop/autocoin</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/woojin/.local/bin:/opt/homebrew/opt/postgresql@18/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>OBSIDIAN_AUTOJI_PATH</key>
+        <string>/Users/woojin/Library/Mobile Documents/iCloud~md~obsidian/Documents/autoji</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+    <key>StandardOutPath</key>
+    <string>/Users/woojin/Desktop/autocoin/logs/remote-control.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/woojin/Desktop/autocoin/logs/remote-control.err.log</string>
+</dict>
+</plist>
