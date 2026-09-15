@@ -7,7 +7,8 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 
-def setup_logging(level: str = "INFO", log_file: str | Path | None = None) -> None:
+def setup_logging(level: str = "INFO", log_file: str | Path | None = None,
+                  console_level: str | None = None) -> None:
     fmt = logging.Formatter("%(asctime)sZ %(levelname)-7s %(name)s | %(message)s",
                             datefmt="%Y-%m-%dT%H:%M:%S")
     fmt.converter = time.gmtime
@@ -19,6 +20,8 @@ def setup_logging(level: str = "INFO", log_file: str | Path | None = None) -> No
 
     console = logging.StreamHandler()
     console.setFormatter(fmt)
+    if console_level:
+        console.setLevel(console_level.upper())
     root.addHandler(console)
 
     if log_file is not None:

@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  EWYUSDT 체결·5호가 수집기 launchd 에이전트.
+  설치: cp deploy/launchd/com.autocoin.collector.plist ~/Library/LaunchAgents/
+        launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.autocoin.collector.plist
+  중지: launchctl bootout gui/$(id -u)/com.autocoin.collector
+  상태: launchctl print gui/$(id -u)/com.autocoin.collector | grep -E 'state|pid|last exit'
+
+  - 로그인 시 시작(RunAtLoad), 종료되면 30초 후 재시작(KeepAlive + ThrottleInterval)
+  - DB/Obsidian 준비 전이면 수집기가 즉시 종료 → 재시작으로 자연 대기
+  - launchd 는 ~/.zshenv 를 읽지 않으므로 필요한 환경변수를 여기서 지정 (시크릿 아님)
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.autocoin.collector</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/woojin/Desktop/autocoin/.venv/bin/python</string>
+        <string>-m</string>
+        <string>src.collect_orderbook</string>
+        <string>--prevent-sleep</string>
+        <string>--console-level</string>
+        <string>WARNING</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/woojin/Desktop/autocoin</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>OBSIDIAN_AUTOJI_PATH</key>
+        <string>/Users/woojin/Library/Mobile Documents/iCloud~md~obsidian/Documents/autoji</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/opt/postgresql@18/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>ProcessType</key>
+    <string>Standard</string>
+    <key>StandardOutPath</key>
+    <string>/Users/woojin/Desktop/autocoin/logs/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/woojin/Desktop/autocoin/logs/launchd.err.log</string>
+</dict>
+</plist>

@@ -14,7 +14,9 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import signal
+import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -127,8 +129,17 @@ def main() -> None:
     ap.add_argument("--status-interval", type=float, default=60.0)
     ap.add_argument("--log-level", default="INFO")
     ap.add_argument("--log-file", default="logs/collector.log")
+    ap.add_argument("--console-level", default=None,
+                    help="콘솔 로그 레벨 (launchd 실행 시 WARNING 권장 — stderr 파일은 회전되지 않음)")
+    ap.add_argument("--prevent-sleep", action="store_true",
+                    help="전원 연결(AC) 중에만 시스템 잠자기 방지. 수집기 종료 시 자동 해제")
     args = ap.parse_args()
-    setup_logging(args.log_level, args.log_file)
+    setup_logging(args.log_level, args.log_file, console_level=args.console_level)
+    if args.prevent_sleep:
+        # caffeinate -s: AC 전원일 때만 시스템 잠자기 방지 assertion. -w: 이 프로세스가 끝나면 함께 종료.
+        # 시스템 전원 설정(pmset)은 바꾸지 않는다. 덮개를 닫으면(외부 모니터 없을 때) 잠자기는 막을 수 없다.
+        subprocess.Popen(["/usr/bin/caffeinate", "-s", "-w", str(os.getpid())])
+        log.info("잠자기 방지 활성화 (AC 전원 연결 중에만)")
     asyncio.run(_amain(args))
 
 
