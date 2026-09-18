@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import logging
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import psycopg
 
@@ -26,6 +27,7 @@ from .storage.db import get_dsn
 from .storage.pg_sink import TRADE_SQL, trade_row
 
 log = logging.getLogger("integrity")
+KST = ZoneInfo("Asia/Seoul")
 
 _W_TRADES = "symbol = %(symbol)s AND exchange_ts >= %(start)s AND exchange_ts < %(end)s"
 
@@ -144,7 +146,8 @@ def render_markdown(r: dict) -> tuple[str, dict]:
         summary["결과_백필행"] = r["backfilled"]
 
     lines = [
-        f"- 심볼: `{r['symbol']}` / 구간: {r['start']:%Y-%m-%d %H:%M}Z ~ {r['end']:%Y-%m-%d %H:%M}Z",
+        f"- 심볼: `{r['symbol']}` / 구간: {r['start'].astimezone(KST):%Y-%m-%d %H:%M} ~ "
+        f"{r['end'].astimezone(KST):%Y-%m-%d %H:%M} KST",
         f"- 체결 {n_tr:,}행 ({r['trades'][1]} ~ {r['trades'][2]}), 5호가 {n_bk:,}행",
         "",
         "| 검사 | 결과 | 상세 |",
@@ -162,11 +165,14 @@ def render_markdown(r: dict) -> tuple[str, dict]:
     ]
     for key, label in (("trade_silences", "무체결"), ("book_silences", "5호가 결측")):
         if r[key]:
-            lines += ["", f"### 가장 긴 {label} 구간", "", "| 시작 | 끝 | 길이 |", "|---|---|---|"]
-            lines += [f"| {a:%Y-%m-%d %H:%M:%S}Z | {b:%H:%M:%S}Z | {_fmt_dur(d)} |" for a, b, d in r[key]]
+            lines += ["", f"### 가장 긴 {label} 구간", "", "| 시작(KST) | 끝 | 길이 |", "|---|---|---|"]
+            lines += [f"| {a.astimezone(KST):%Y-%m-%d %H:%M:%S} | {b.astimezone(KST):%H:%M:%S} | "
+                      f"{_fmt_dur(d)} |" for a, b, d in r[key]]
     if r["agg_gaps"]:
-        lines += ["", "### 체결 id 갭", "", "| from_id | to_id | 직전 시각 | 다음 시각 |", "|---|---|---|---|"]
-        lines += [f"| {g[0]} | {g[1]} | {g[2]:%H:%M:%S.%f} | {g[3]:%H:%M:%S.%f} |" for g in r["agg_gaps"][:20]]
+        lines += ["", "### 체결 id 갭", "", "| from_id | to_id | 직전 시각(KST) | 다음 시각(KST) |",
+                  "|---|---|---|---|"]
+        lines += [f"| {g[0]} | {g[1]} | {g[2].astimezone(KST):%m-%d %H:%M:%S} | "
+                  f"{g[3].astimezone(KST):%m-%d %H:%M:%S} |" for g in r["agg_gaps"][:20]]
     if r["events"]:
         lines += ["", "### 수집기 이벤트", "", "| kind | stream | event | 건수 |", "|---|---|---|---|"]
         lines += [f"| {k} | {s} | {e} | {c} |" for k, s, e, c in r["events"]]
