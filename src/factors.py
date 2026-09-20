@@ -132,6 +132,39 @@ def corr_table(df: pd.DataFrame, cols: list[str] = FACTORS, target: str = TARGET
     return pd.DataFrame(out).set_index("factor")
 
 
+def perf_row(d: pd.DataFrame, col: str, target: str = TARGET, quantiles: int = 5) -> dict:
+    """한 조합의 성과: IC(Pearson), t값, 상위-하위 분위 선행수익률 차(bp)."""
+    n = len(d)
+    r = d[col].corr(d[target])
+    t = r * np.sqrt(max(n - 2, 1) / max(1 - r * r, 1e-12))
+    # 동일값이 많은 팩터(TxnImbalance 의 ±1)에서도 분위가 갈리도록 순위로 자른다
+    q = pd.qcut(d[col].rank(method="first"), quantiles, labels=False)
+    spread = (d[target][q == quantiles - 1].mean() - d[target][q == 0].mean()) * 1e4
+    return {"n": n, "ic": r, "t": t, "q_spread_bp": spread}
+
+
+def sweep(book: pd.DataFrame, trades: pd.DataFrame, lookbacks: list[int], horizons: list[int],
+          grid: int = 10, outages: list[tuple] = (), max_stale: float = 30.0,
+          min_samples: int = 30) -> pd.DataFrame:
+    """룩백 × 선행 조합별 성과. 창이 겹치지 않는 표본(lookback+horizon 간격)이 기준."""
+    out = []
+    for lb in lookbacks:
+        for hz in horizons:
+            df = build(book, trades, lb, hz, grid, outages, max_stale)
+            if df.empty:
+                continue
+            ind = df.iloc[::max(1, (lb + hz) // grid)]
+            for c in FACTORS:
+                d = ind[[c, TARGET]].dropna()
+                if len(d) < min_samples:
+                    continue
+                row = {"lookback": lb, "horizon": hz, "factor": c, **perf_row(d, c)}
+                row["ic_overlap"] = df[c].corr(df[TARGET])
+                row["n_overlap"] = len(df)
+                out.append(row)
+    return pd.DataFrame(out)
+
+
 def _fmt(df: pd.DataFrame) -> str:
     return df.to_string(float_format=lambda v: f"{v:+.4f}")
 
@@ -144,6 +177,9 @@ def main() -> None:
     ap.add_argument("--horizon", type=int, default=10, help="선행 수익률 구간 (초)")
     ap.add_argument("--grid", type=int, default=10, help="표본 간격 (초)")
     ap.add_argument("--max-stale", type=float, default=30.0, help="5호가 LOCF 허용 한계 (초)")
+    ap.add_argument("--sweep", action="store_true", help="룩백 × 선행 조합 성과 분석")
+    ap.add_argument("--lookbacks", default="600,300,180", help="sweep 룩백 목록 (초)")
+    ap.add_argument("--horizons", default="60,180,300", help="sweep 선행 목록 (초)")
     ap.add_argument("--csv", default=None)
     ap.add_argument("--dsn", default=None)
     args = ap.parse_args()
@@ -163,13 +199,40 @@ def main() -> None:
     if book.empty:
         raise SystemExit("구간 내 5호가 데이터가 없습니다.")
 
+    b0, b1 = book.ts.iloc[0].tz_convert(KST), book.ts.iloc[-1].tz_convert(KST)
+    head = (f"{args.symbol} {b0:%Y-%m-%d %H:%M} ~ {b1:%m-%d %H:%M} KST "
+            f"(체결 {len(trades):,} · 5호가 {len(book):,} · 수집중단 {len(outages)}건)")
+
+    if args.sweep:
+        lbs = [int(x) for x in args.lookbacks.split(",")]
+        hzs = [int(x) for x in args.horizons.split(",")]
+        res = sweep(book, trades, lbs, hzs, args.grid, outages, args.max_stale)
+        if res.empty:
+            raise SystemExit("유효 표본이 없습니다.")
+        print(head)
+        print(f"룩백 {lbs}s × 선행 {hzs}s · 창 비중첩 표본 기준\n")
+        print("[비중첩 표본 수]  행=룩백(초), 열=선행(초)")
+        print(res.pivot_table(index="lookback", columns="horizon", values="n",
+                              aggfunc="first").to_string())
+        for c in FACTORS:
+            sub = res[res.factor == c]
+            print(f"\n[{c}]")
+            for label, key in (("IC (Pearson)", "ic"), ("t 값", "t"),
+                               ("상위-하위 분위 수익률 차 (bp)", "q_spread_bp")):
+                print(f"  · {label}")
+                print(_fmt(sub.pivot(index="lookback", columns="horizon", values=key)))
+        if args.csv:
+            out = Path(args.csv)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            res.to_csv(out, index=False)
+            print(f"\n{out}")
+        return
+
     df = build(book, trades, args.lookback, args.horizon, args.grid, outages, args.max_stale)
     if df.empty:
         raise SystemExit("유효 표본이 없습니다.")
 
-    span = df.index.tz_convert(KST)
-    print(f"{args.symbol} {span[0]:%Y-%m-%d %H:%M} ~ {span[-1]:%m-%d %H:%M} KST "
-          f"(체결 {len(trades):,} · 5호가 {len(book):,} · 수집중단 {len(outages)}건)")
+    print(head)
     print(f"룩백 {args.lookback}s · 선행 {args.horizon}s · 격자 {args.grid}s → 표본 {len(df):,}\n")
 
     print(f"[팩터 ~ {TARGET}({args.horizon}s)]")

@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS market.trades (
     is_buyer_maker  boolean          NOT NULL,  -- m: true = 매수자가 maker = 매도 주도 체결
     event_ts        timestamptz,                -- E (REST 백필 행은 NULL)
     recv_ts         timestamptz,                -- 로컬 수신 시각 (REST 백필 행은 NULL)
-    source          text             NOT NULL DEFAULT 'ws',   -- ws | rest_backfill
+    source          text             NOT NULL DEFAULT 'ws',   -- ws | rest_backfill | archive
     PRIMARY KEY (symbol, exchange_ts, agg_id)
 );
 SELECT create_hypertable('market.trades', by_range('exchange_ts', INTERVAL '1 day'),

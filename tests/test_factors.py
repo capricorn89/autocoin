@@ -4,7 +4,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from src.factors import FACTORS, TARGET, build, corr_table
+from src.factors import FACTORS, TARGET, build, corr_table, perf_row, sweep
 
 START = pd.Timestamp("2026-01-01 00:00:00", tz="UTC")
 N = 300
@@ -79,3 +79,26 @@ def test_corr_table_rank_correlation() -> None:
     assert out.loc["LobImbalance", "spearman"] == pytest.approx(-1.0)
     assert out.loc["TxnImbalance", "pearson"] == pytest.approx(0.9811, abs=1e-4)
     assert list(out.index) == FACTORS and (out.n == 5).all()
+
+
+def test_perf_row_quantile_spread() -> None:
+    """팩터가 클수록 선행수익률이 크면 상위-하위 분위 차가 양(+)."""
+    d = pd.DataFrame({"f": range(100), TARGET: [i * 1e-4 for i in range(100)]})
+    out = perf_row(d, "f")
+    assert out["ic"] == pytest.approx(1.0)
+    assert out["q_spread_bp"] == pytest.approx(80.0)   # (평균 89.5 - 9.5) * 1e-4 * 1e4
+    assert out["n"] == 100
+
+
+def test_perf_row_handles_tied_factor_values() -> None:
+    """±1 로 몰린 팩터에서도 분위 분할이 실패하지 않는다."""
+    d = pd.DataFrame({"f": [-1.0] * 40 + [1.0] * 40, TARGET: [0.0] * 80})
+    assert perf_row(d, "f")["q_spread_bp"] == pytest.approx(0.0)
+
+
+def test_sweep_shape() -> None:
+    """조합 × 팩터 수만큼 행이 나온다."""
+    res = sweep(make_book(), make_trades(), [60], [10, 20], grid=10, min_samples=1)
+    assert set(res.factor) == set(FACTORS)
+    assert sorted(res.horizon.unique()) == [10, 20]
+    assert {"n", "ic", "t", "q_spread_bp", "ic_overlap"} <= set(res.columns)

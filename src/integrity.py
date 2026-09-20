@@ -20,8 +20,8 @@ from zoneinfo import ZoneInfo
 
 import psycopg
 
-from . import obsidian
-from .exchange.rest import FuturesRestClient
+from . import archive, obsidian
+from .exchange.rest import BinanceRestError, FuturesRestClient
 from .logging_setup import setup_logging
 from .storage.db import get_dsn
 from .storage.pg_sink import TRADE_SQL, trade_row
@@ -102,22 +102,34 @@ def backfill_agg_gaps(conn: psycopg.Connection, rest, symbol: str, gaps: list[tu
         if to_id - from_id + 1 > max_ids_per_gap:
             log.warning("%s 누락 %d~%d 가 너무 커서 백필 생략", symbol, from_id, to_id)
             continue
-        cur_id = from_id
-        while cur_id <= to_id:
-            batch = rest.get("/fapi/v1/aggTrades", {"symbol": symbol, "fromId": cur_id, "limit": 1000})
-            if not batch:
-                break
-            rows = [trade_row(t, symbol=symbol, source="rest_backfill")
-                    for t in batch if from_id <= int(t["a"]) <= to_id]
-            if rows:
-                with conn.cursor() as cur:
-                    cur.executemany(TRADE_SQL, rows)
-                inserted += len(rows)
-            last = int(batch[-1]["a"])
-            if last >= to_id or last < cur_id:
-                break
-            cur_id = last + 1
+        try:
+            inserted += _backfill_rest(conn, rest, symbol, from_id, to_id)
+        except BinanceRestError as e:
+            if "-4166" not in str(e):
+                raise
+            # REST 는 최근 2일만 조회 가능 → 공개 아카이브(일 단위 ZIP)로 복구
+            log.info("%s 누락 %d~%d: REST 2일 제한, 아카이브로 전환", symbol, from_id, to_id)
+            inserted += archive.backfill_gap(conn, symbol, from_id, to_id, gap[2], gap[3])
         conn.commit()
+    return inserted
+
+
+def _backfill_rest(conn: psycopg.Connection, rest, symbol: str, from_id: int, to_id: int) -> int:
+    inserted, cur_id = 0, from_id
+    while cur_id <= to_id:
+        batch = rest.get("/fapi/v1/aggTrades", {"symbol": symbol, "fromId": cur_id, "limit": 1000})
+        if not batch:
+            break
+        rows = [trade_row(t, symbol=symbol, source="rest_backfill")
+                for t in batch if from_id <= int(t["a"]) <= to_id]
+        if rows:
+            with conn.cursor() as cur:
+                cur.executemany(TRADE_SQL, rows)
+            inserted += len(rows)
+        last = int(batch[-1]["a"])
+        if last >= to_id or last < cur_id:
+            break
+        cur_id = last + 1
     return inserted
 
 
