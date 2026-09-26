@@ -73,6 +73,7 @@ class CollectorConfig:
     backoff_base: float = 1.0
     backoff_max: float = 60.0
     status_interval: float = 60.0
+    outage_record_s: float = 180.0     # depth 수신 간격이 이 이상이면 결측 구간으로 기록 (알림용)
     extra: dict = field(default_factory=dict)
 
     def stream_urls(self) -> dict[str, str]:
@@ -204,6 +205,10 @@ class OrderBookCollector:
         self._last_agg_id: dict[str, int] = {}
         self._last_top: dict[str, tuple] = {}
         self.stats: Counter = Counter()
+        # 수집 끊김 감시용 (monitor.CollectionMonitor 가 읽는다). 시각은 벽시계(time.time) 기준.
+        self.last_depth_at: float | None = None
+        self.outages: list[tuple[float, float]] = []
+        self.last_disconnect: dict[str, str] = {}
 
     # ---- 메인 루프 ----
     async def run(self, stop: asyncio.Event) -> None:
@@ -235,6 +240,7 @@ class OrderBookCollector:
                 # StaleStreamError / SessionExpired / TimeoutError 는 OSError 하위
                 reason = f"{type(e).__name__}: {e}"
                 planned = isinstance(e, SessionExpired)
+                self.last_disconnect[name] = reason
             finally:
                 if name == "depth":   # 끊긴 동안의 diff 는 복구 불가 → 오더북 무효화 후 재동기화
                     for b in self.books.values():
@@ -283,6 +289,10 @@ class OrderBookCollector:
         etype, sym = data.get("e"), data.get("s")
         recv_ts = int(self._clock() * 1000)
         if etype == "depthUpdate" and sym in self.books:
+            now = recv_ts / 1000
+            if self.last_depth_at is not None and now - self.last_depth_at >= self.cfg.outage_record_s:
+                self.outages.append((self.last_depth_at, now))
+            self.last_depth_at = now
             self.stats[f"{sym}.depth"] += 1
             self.sink.write({"kind": "depth", "symbol": sym, "recv_ts": recv_ts, **data})
             sync = self.books[sym]

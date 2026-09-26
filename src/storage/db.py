@@ -53,6 +53,14 @@ def apply_schema(dsn: str) -> dict:
     return {"timescaledb": version, "compression": compression, "compression_error": error}
 
 
+def last_book_ts(dsn: str, symbol: str) -> float | None:
+    """해당 심볼의 마지막 5호가 거래소 시각(epoch 초). 수집 재개 시 공백 계산용."""
+    with psycopg.connect(dsn) as conn:
+        v = conn.execute("SELECT max(exchange_ts) FROM market.book_top5 WHERE symbol = %s",
+                         (symbol,)).fetchone()[0]
+    return v.timestamp() if v else None
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="autocoin DB 관리")
     ap.add_argument("--dsn", default=None)

@@ -24,7 +24,10 @@ from .exchange.rest import FuturesRestClient, measure_clock_offset
 from .exchange.sinks import FanoutSink, JsonlSink
 from .exchange.ws import CollectorConfig, OrderBookCollector
 from .logging_setup import setup_logging
+from .monitor import CollectionMonitor
+from .notify import TelegramNotifier
 from .power import SleepGuard, SleepPolicy
+from .storage.db import last_book_ts
 from .storage.pg_sink import PostgresSink
 
 log = logging.getLogger("collector")
@@ -77,24 +80,50 @@ async def _amain(args: argparse.Namespace) -> dict:
                           depth_speed=args.depth_speed, top_levels=args.top_levels,
                           stale_timeout=args.stale_timeout,
                           trade_stale_timeout=args.trade_stale_timeout,
-                          status_interval=args.status_interval)
+                          status_interval=args.status_interval,
+                          outage_record_s=args.alert_after)
     collector = OrderBookCollector(cfg, sink, rest=rest)
-    guard = (SleepGuard(SleepPolicy(args.battery_floor, args.net_grace), emit=sink.write)
+
+    # 수집 끊김 알림: 텔레그램 설정이 없으면 경고만 남기고 수집은 계속한다.
+    monitor = None
+    label = "/".join(cfg.symbols)
+    if not args.no_notify:
+        notifier = TelegramNotifier.from_env()
+        if notifier is None:
+            log.warning("텔레그램 미설정 — ~/.config/autocoin/.env 에 TELEGRAM_BOT_TOKEN, "
+                        "TELEGRAM_CHAT_ID 를 넣으면 수집 끊김 알림을 받습니다.")
+        else:
+            monitor = CollectionMonitor(notifier.send, collector, label, alert_after=args.alert_after)
+            if pg is not None:   # 재부팅·중단으로 생긴 공백도 첫 수신 때 복구 알림으로 잡는다
+                collector.last_depth_at = last_book_ts(pg.dsn, cfg.symbols[0])
+
+    def on_power(rec: dict) -> None:
+        sink.write(rec)
+        if monitor is not None:
+            monitor.on_power(rec)
+
+    guard = (SleepGuard(SleepPolicy(args.battery_floor, args.net_grace), emit=on_power)
              if args.prevent_sleep else None)
     started = datetime.now(timezone.utc)
-    log.info("수집 시작: %s (duration=%s, db=%s, raw=%s, 잠자기 방지=%s)", cfg.symbols,
+    log.info("수집 시작: %s (duration=%s, db=%s, raw=%s, 잠자기 방지=%s, 알림=%s)", cfg.symbols,
              f"{args.duration}s" if args.duration > 0 else "무기한",
              "off" if pg is None else pg.dsn, args.raw_dir or "off",
-             f"AC 또는 배터리 {args.battery_floor}%+·네트워크" if guard else "off")
+             f"AC 또는 배터리 {args.battery_floor}%+·네트워크" if guard else "off",
+             f"텔레그램 {args.alert_after:.0f}s" if monitor else "off")
     try:
         async with asyncio.TaskGroup() as tg:
             tg.create_task(collector.run(stop))
             if guard is not None:
                 tg.create_task(guard.run(stop))
+            if monitor is not None:
+                tg.create_task(monitor.run(stop))
     finally:
         if guard is not None:
             guard.release()
         sink.close()
+        if monitor is not None:
+            await asyncio.to_thread(monitor.final, f"⏹ {label} 수집기 종료 — launchd 가 켜져 있으면 "
+                                                   "30초 뒤 자동으로 다시 시작해요.")
     ended = datetime.now(timezone.utc)
 
     summary = collector.summary()
@@ -145,6 +174,9 @@ def main() -> None:
                     help="배터리에서 잠자기를 막는 최소 잔량(%%)")
     ap.add_argument("--net-grace", type=float, default=300.0,
                     help="배터리에서 네트워크가 끊겨도 잠자기 방지를 유지하는 유예 시간(초)")
+    ap.add_argument("--alert-after", type=float, default=180.0,
+                    help="호가 수신이 이 시간(초) 넘게 없으면 텔레그램 끊김 알림")
+    ap.add_argument("--no-notify", action="store_true", help="텔레그램 알림 끔 (수동 테스트용)")
     args = ap.parse_args()
     setup_logging(args.log_level, args.log_file, console_level=args.console_level)
     asyncio.run(_amain(args))
