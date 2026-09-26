@@ -64,11 +64,45 @@ class TelegramNotifier:
         return True
 
 
+def list_chats(token: str, session: requests.Session | None = None) -> list[dict]:
+    """봇에게 최근 메시지를 보낸 대화방 목록 (getUpdates). chat_id 확인용."""
+    s = session or requests.Session()
+    try:
+        r = s.get(f"https://api.telegram.org/bot{token}/getUpdates", timeout=15)
+    except requests.RequestException as e:
+        raise SystemExit(f"getUpdates 실패({type(e).__name__})") from None
+    if r.status_code != 200:
+        raise SystemExit(f"getUpdates 실패 HTTP {r.status_code} — 토큰을 확인하세요.")
+    chats: dict[int, dict] = {}
+    for u in r.json().get("result", []):
+        msg = u.get("message") or u.get("channel_post") or u.get("my_chat_member") or {}
+        c = msg.get("chat")
+        if c:
+            chats[c["id"]] = {"chat_id": c["id"], "type": c.get("type"),
+                              "name": c.get("title") or " ".join(
+                                  x for x in (c.get("first_name"), c.get("last_name")) if x)
+                              or c.get("username")}
+    return list(chats.values())
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="텔레그램 알림 설정 확인")
     ap.add_argument("--test", action="store_true")
+    ap.add_argument("--chats", action="store_true",
+                    help="봇에게 말을 건 대화방의 chat_id 출력 (TELEGRAM_BOT_TOKEN 만 있으면 됨)")
     args = ap.parse_args()
     logging.basicConfig(level="INFO")
+    if args.chats:
+        load_secrets_env()
+        token = (os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN") or "").strip()
+        if not token:
+            raise SystemExit("TELEGRAM_BOT_TOKEN 이 ~/.config/autocoin/.env 에 없습니다.")
+        chats = list_chats(token)
+        if not chats:
+            print("대화 기록이 없습니다. 텔레그램에서 봇에게 아무 메시지나 보낸 뒤 다시 실행하세요.")
+        for c in chats:
+            print(f"chat_id={c['chat_id']}  type={c['type']}  name={c['name']}")
+        return
     n = TelegramNotifier.from_env()
     if n is None:
         raise SystemExit("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID 가 ~/.config/autocoin/.env 에 없습니다.")
