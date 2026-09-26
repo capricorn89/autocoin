@@ -35,7 +35,7 @@ TOP_COLS = ("exchange_ts", "symbol", "update_id", "event_ts", "recv_ts") + tuple
     f"{side}_{field}_{i}" for side in ("bid", "ask") for field in ("px", "qty")
     for i in range(1, TOP_LEVELS + 1))
 EVENT_COLS = ("recv_ts", "kind", "symbol", "stream", "detail")
-EVENT_KINDS = {"gap", "conn", "snapshot", "clock", "sink_error"}
+EVENT_KINDS = {"gap", "conn", "snapshot", "clock", "sink_error", "power"}
 
 
 def _insert_sql(table: str, cols: tuple[str, ...]) -> str:

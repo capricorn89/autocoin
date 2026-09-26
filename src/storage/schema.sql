@@ -52,7 +52,7 @@ SELECT create_hypertable('market.book_top5', by_range('exchange_ts', INTERVAL '1
 -- 수집기 이벤트: 시퀀스 갭, 연결/끊김, 스냅샷 재동기화, 시계 오프셋 (정합성 검사 근거)
 CREATE TABLE IF NOT EXISTS market.collector_events (
     recv_ts  timestamptz NOT NULL,
-    kind     text        NOT NULL,   -- gap | conn | snapshot | clock | sink_error
+    kind     text        NOT NULL,   -- gap | conn | snapshot | clock | sink_error | power(잠자기 방지 켜짐/해제)
     symbol   text,
     stream   text,
     detail   jsonb       NOT NULL DEFAULT '{}'::jsonb
