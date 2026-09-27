@@ -32,6 +32,26 @@ KST = ZoneInfo("Asia/Seoul")
 _W_TRADES = "symbol = %(symbol)s AND exchange_ts >= %(start)s AND exchange_ts < %(end)s"
 
 
+def find_agg_gaps(conn: psycopg.Connection, symbol: str, start: datetime,
+                  end: datetime) -> list[tuple]:
+    """aggTrade id 누락 구간 [(from_id, to_id, 직전 시각, 다음 시각), ...].
+
+    구간 시작 직전 체결 1건을 기준점으로 함께 본다. 없으면 구간보다 긴 공백(예: 하루 오프라인 후
+    --hours 24 로 검사)이 구간 경계에 걸려 갭으로 잡히지 않는다.
+    """
+    return conn.execute(f"""
+        SELECT prev_id + 1 AS from_id, agg_id - 1 AS to_id, prev_ts, exchange_ts
+        FROM (SELECT agg_id, exchange_ts, lag(agg_id) OVER w AS prev_id, lag(exchange_ts) OVER w AS prev_ts
+              FROM (SELECT agg_id, exchange_ts FROM market.trades WHERE {_W_TRADES}
+                    UNION ALL
+                    (SELECT agg_id, exchange_ts FROM market.trades
+                     WHERE symbol = %(symbol)s AND exchange_ts < %(start)s
+                     ORDER BY exchange_ts DESC LIMIT 1)) s
+              WINDOW w AS (ORDER BY agg_id)) t
+        WHERE prev_id IS NOT NULL AND agg_id <> prev_id + 1 ORDER BY from_id""",
+                        {"symbol": symbol, "start": start, "end": end}).fetchall()
+
+
 def run_checks(conn: psycopg.Connection, symbol: str, start: datetime, end: datetime,
                trade_gap_s: float = 60.0, book_gap_s: float = 10.0, limit: int = 10) -> dict:
     p = {"symbol": symbol, "start": start, "end": end, "tgap": trade_gap_s,
@@ -50,18 +70,7 @@ def run_checks(conn: psycopg.Connection, symbol: str, start: datetime, end: date
     r["book_rows"] = rows(f"SELECT count(*), min(exchange_ts), max(exchange_ts) "
                           f"FROM market.book_top5 WHERE {_W_TRADES}")[0]
 
-    # 구간 시작 직전 체결 1건을 기준점으로 함께 본다. 없으면 구간보다 긴 공백(예: 하루 오프라인 후
-    # --hours 24 로 검사)이 구간 경계에 걸려 갭으로 잡히지 않는다.
-    r["agg_gaps"] = rows(f"""
-        SELECT prev_id + 1 AS from_id, agg_id - 1 AS to_id, prev_ts, exchange_ts
-        FROM (SELECT agg_id, exchange_ts, lag(agg_id) OVER w AS prev_id, lag(exchange_ts) OVER w AS prev_ts
-              FROM (SELECT agg_id, exchange_ts FROM market.trades WHERE {_W_TRADES}
-                    UNION ALL
-                    (SELECT agg_id, exchange_ts FROM market.trades
-                     WHERE symbol = %(symbol)s AND exchange_ts < %(start)s
-                     ORDER BY exchange_ts DESC LIMIT 1)) s
-              WINDOW w AS (ORDER BY agg_id)) t
-        WHERE prev_id IS NOT NULL AND agg_id <> prev_id + 1 ORDER BY from_id""")
+    r["agg_gaps"] = find_agg_gaps(conn, symbol, start, end)
     r["agg_missing_ids"] = sum(max(0, g[1] - g[0] + 1) for g in r["agg_gaps"])
     r["trade_ts_inversions"] = one(f"""
         SELECT count(*) FROM (SELECT exchange_ts, lag(exchange_ts) OVER (ORDER BY agg_id) AS prev_ts

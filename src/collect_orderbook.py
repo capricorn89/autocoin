@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import obsidian
+from .autobackfill import AutoBackfiller
 from .exchange.rest import FuturesRestClient, measure_clock_offset
 from .exchange.sinks import FanoutSink, JsonlSink
 from .exchange.ws import CollectorConfig, OrderBookCollector
@@ -97,6 +98,16 @@ async def _amain(args: argparse.Namespace) -> dict:
             if pg is not None:   # 재부팅·중단으로 생긴 공백도 첫 수신 때 복구 알림으로 잡는다
                 collector.last_depth_at = last_book_ts(pg.dsn, cfg.symbols[0])
 
+    # 체결 누락 자동 백필: 수집 재개 후 + 정기 점검 (DB 적재할 때만)
+    backfillers = []
+    if pg is not None and not args.no_backfill:
+        notify = monitor.queue.append if monitor is not None else None
+        for sym in cfg.symbols:
+            bf = AutoBackfiller(pg.dsn, sym, notify=notify, sweep_hours=args.sweep_hours,
+                                sweep_interval_s=args.sweep_interval)
+            collector.outage_listeners.append(bf.on_outage)
+            backfillers.append(bf)
+
     def on_power(rec: dict) -> None:
         sink.write(rec)
         if monitor is not None:
@@ -117,6 +128,8 @@ async def _amain(args: argparse.Namespace) -> dict:
                 tg.create_task(guard.run(stop))
             if monitor is not None:
                 tg.create_task(monitor.run(stop))
+            for bf in backfillers:
+                tg.create_task(bf.run(stop))
     finally:
         if guard is not None:
             guard.release()
@@ -177,6 +190,11 @@ def main() -> None:
     ap.add_argument("--alert-after", type=float, default=180.0,
                     help="호가 수신이 이 시간(초) 넘게 없으면 텔레그램 끊김 알림")
     ap.add_argument("--no-notify", action="store_true", help="텔레그램 알림 끔 (수동 테스트용)")
+    ap.add_argument("--no-backfill", action="store_true", help="체결 자동 백필 끔")
+    ap.add_argument("--sweep-hours", type=float, default=72.0,
+                    help="정기 점검에서 확인할 최근 시간(시간). REST 2일 + 아카이브 게시 지연 고려")
+    ap.add_argument("--sweep-interval", type=float, default=6 * 3600,
+                    help="정기 점검 주기(초)")
     args = ap.parse_args()
     setup_logging(args.log_level, args.log_file, console_level=args.console_level)
     asyncio.run(_amain(args))

@@ -208,6 +208,7 @@ class OrderBookCollector:
         # 수집 끊김 감시용 (monitor.CollectionMonitor 가 읽는다). 시각은 벽시계(time.time) 기준.
         self.last_depth_at: float | None = None
         self.outages: list[tuple[float, float]] = []
+        self.outage_listeners: list = []   # (시작, 끝) 콜백 — 자동 백필이 구독
         self.last_disconnect: dict[str, str] = {}
 
     # ---- 메인 루프 ----
@@ -292,6 +293,8 @@ class OrderBookCollector:
             now = recv_ts / 1000
             if self.last_depth_at is not None and now - self.last_depth_at >= self.cfg.outage_record_s:
                 self.outages.append((self.last_depth_at, now))
+                for cb in self.outage_listeners:
+                    cb(self.last_depth_at, now)
             self.last_depth_at = now
             self.stats[f"{sym}.depth"] += 1
             self.sink.write({"kind": "depth", "symbol": sym, "recv_ts": recv_ts, **data})
