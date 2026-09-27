@@ -50,10 +50,17 @@ def run_checks(conn: psycopg.Connection, symbol: str, start: datetime, end: date
     r["book_rows"] = rows(f"SELECT count(*), min(exchange_ts), max(exchange_ts) "
                           f"FROM market.book_top5 WHERE {_W_TRADES}")[0]
 
+    # 구간 시작 직전 체결 1건을 기준점으로 함께 본다. 없으면 구간보다 긴 공백(예: 하루 오프라인 후
+    # --hours 24 로 검사)이 구간 경계에 걸려 갭으로 잡히지 않는다.
     r["agg_gaps"] = rows(f"""
         SELECT prev_id + 1 AS from_id, agg_id - 1 AS to_id, prev_ts, exchange_ts
         FROM (SELECT agg_id, exchange_ts, lag(agg_id) OVER w AS prev_id, lag(exchange_ts) OVER w AS prev_ts
-              FROM market.trades WHERE {_W_TRADES} WINDOW w AS (ORDER BY agg_id)) t
+              FROM (SELECT agg_id, exchange_ts FROM market.trades WHERE {_W_TRADES}
+                    UNION ALL
+                    (SELECT agg_id, exchange_ts FROM market.trades
+                     WHERE symbol = %(symbol)s AND exchange_ts < %(start)s
+                     ORDER BY exchange_ts DESC LIMIT 1)) s
+              WINDOW w AS (ORDER BY agg_id)) t
         WHERE prev_id IS NOT NULL AND agg_id <> prev_id + 1 ORDER BY from_id""")
     r["agg_missing_ids"] = sum(max(0, g[1] - g[0] + 1) for g in r["agg_gaps"])
     r["trade_ts_inversions"] = one(f"""
@@ -100,7 +107,12 @@ def backfill_agg_gaps(conn: psycopg.Connection, rest, symbol: str, gaps: list[tu
     for gap in gaps:
         from_id, to_id = int(gap[0]), int(gap[1])
         if to_id - from_id + 1 > max_ids_per_gap:
-            log.warning("%s 누락 %d~%d 가 너무 커서 백필 생략", symbol, from_id, to_id)
+            # REST 로는 요청이 너무 많아진다(1000건/회) → 아카이브로 복구. 아직 게시 안 된 날짜분은
+            # 남으므로 다음 날 다시 실행하면 채워진다.
+            log.info("%s 누락 %d~%d (%d건)가 REST 한도를 넘어 아카이브로 복구", symbol, from_id, to_id,
+                     to_id - from_id + 1)
+            inserted += archive.backfill_gap(conn, symbol, from_id, to_id, gap[2], gap[3])
+            conn.commit()
             continue
         try:
             inserted += _backfill_rest(conn, rest, symbol, from_id, to_id)
