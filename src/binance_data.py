@@ -111,6 +111,30 @@ def load_klines(symbol: str, interval: str, start_ms: int | None = None,
     return df
 
 
+def fetch_funding_rates(symbol: str, start_ms: int, end_ms: int) -> pd.DataFrame:
+    """[start_ms, end_ms] 펀딩비 이력. 인덱스는 fundingTime(UTC), 컬럼 fundingRate/markPrice."""
+    rows: list[dict] = []
+    cur = start_ms
+    while cur <= end_ms:
+        batch = _request("/fapi/v1/fundingRate",
+                         {"symbol": symbol, "startTime": cur, "endTime": end_ms, "limit": 1000})
+        if not batch:
+            break
+        rows.extend(batch)
+        nxt = batch[-1]["fundingTime"] + 1
+        if nxt <= cur or len(batch) < 1000:
+            break
+        cur = nxt
+        _time.sleep(0.25)
+    if not rows:
+        return pd.DataFrame(columns=["fundingRate", "markPrice"])
+    df = pd.DataFrame(rows).drop_duplicates(subset="fundingTime").sort_values("fundingTime")
+    df["ts"] = pd.to_datetime(df["fundingTime"], unit="ms", utc=True)
+    for c in ("fundingRate", "markPrice"):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df.set_index("ts")[["fundingRate", "markPrice"]]
+
+
 def find_gaps(df: pd.DataFrame, interval: str) -> pd.DataFrame:
     """기대 간격보다 큰 시간 갭(휴장/주말 등)을 반환."""
     step = pd.Timedelta(milliseconds=_INTERVAL_MS[interval])

@@ -1,0 +1,5 @@
+# research/ 전용 (라이브·수집 경로에는 불필요)
+# 캐시(data/overnight/)가 있으면 네트워크 없이 재현된다. 캐시가 없을 때만 원천에서 받는다.
+yfinance>=0.2
+finance-datareader>=0.9
+tabulate>=0.9   # 실험 노트 표 (pandas.to_markdown)
