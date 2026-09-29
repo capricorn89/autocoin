@@ -56,17 +56,27 @@ class FuturesRestClient:
     def get(self, path: str, params: dict | None = None, signed: bool = False) -> Any:
         return self._send("GET", path, params, signed)
 
+    def post(self, path: str, params: dict | None = None, signed: bool = True) -> Any:
+        """주문 등 비멱등 요청. 네트워크 오류·5xx 에 자동 재시도하지 않는다 (중복 주문 방지).
+        호출측이 clientOrderId 로 조회해 실제 접수 여부를 확인해야 한다."""
+        return self._send("POST", path, params, signed, max_retries=1)
+
+    def delete(self, path: str, params: dict | None = None, signed: bool = True) -> Any:
+        return self._send("DELETE", path, params, signed)
+
     def depth_snapshot(self, symbol: str, limit: int = 1000) -> dict:
         """오더북 스냅샷. limit=1000 은 weight 20."""
         return self.get("/fapi/v1/depth", {"symbol": symbol, "limit": limit})
 
     # ---- 내부 ----
-    def _send(self, method: str, path: str, params: dict | None, signed: bool) -> Any:
+    def _send(self, method: str, path: str, params: dict | None, signed: bool,
+              max_retries: int | None = None) -> Any:
         if signed and self.credentials is None:
             raise MissingCredentialsError(f"{path}: 서명 요청에는 API 키가 필요합니다.")
         url = self.base_url + path
         last_error: str = ""
-        for attempt in range(self.max_retries):
+        tries = self.max_retries if max_retries is None else max_retries
+        for attempt in range(tries):
             self._throttle()
             headers: dict[str, str] = {}
             if signed:
@@ -80,7 +90,7 @@ class FuturesRestClient:
             except requests.RequestException as e:
                 last_error = f"{type(e).__name__}: {e}"
                 log.warning("REST %s 네트워크 오류(%d/%d): %s", path, attempt + 1,
-                            self.max_retries, last_error)
+                            tries, last_error)
                 self._sleep(self._backoff(attempt))
                 continue
 
@@ -98,14 +108,14 @@ class FuturesRestClient:
             if r.status_code >= 500:
                 last_error = f"HTTP {r.status_code}"
                 log.warning("REST %s 서버 오류 %d (%d/%d)", path, r.status_code,
-                            attempt + 1, self.max_retries)
+                            attempt + 1, tries)
                 self._sleep(self._backoff(attempt))
                 continue
             if r.status_code >= 400:
                 raise BinanceRestError(f"{path}: HTTP {r.status_code} {r.text[:200]}",
                                        r.status_code, r.text)
             return r.json()
-        raise BinanceRestError(f"{path}: 재시도 {self.max_retries}회 초과 ({last_error})")
+        raise BinanceRestError(f"{path}: 재시도 {tries}회 초과 ({last_error})")
 
     def _update_weight(self, headers) -> None:
         raw = headers.get("X-MBX-USED-WEIGHT-1M") or headers.get("x-mbx-used-weight-1m")
