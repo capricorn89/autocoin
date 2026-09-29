@@ -341,7 +341,7 @@ class BinanceFuturesBroker:
             self._sync_from_fills(cid)
             self._pos_cache.realized_pnl += float(t.get("realizedPnl", 0) or 0)
             self._pos_cache.fees += fee
-            self._emit(OrderEvent(f.ts, cid, "filled", {"qty": f.qty, "price": f.price, "fee": fee,
+            self._emit(OrderEvent(f.ts, cid, "filled", {"side": f.side.value, "qty": f.qty, "price": f.price, "fee": fee,
                                                         "liquidity": f.liquidity.value}))
 
     def _sync_from_fills(self, client_id: str) -> None:

@@ -75,12 +75,14 @@ class Runner:
                  health: Callable[[], dict] | None = None,
                  funding: Callable[[datetime, datetime, float], float] | None = None,
                  clock: Callable[[], datetime] = _utc_now, sleep: Callable[[float], None] = _time.sleep,
-                 calendar_check: Callable[[Spec], list[str]] = calendar_diffs):
+                 calendar_check: Callable[[Spec], list[str]] = calendar_diffs,
+                 on_night_done: Callable[[str], None] | None = None):
         self.spec, self.broker, self.market, self.mode = spec, broker, market, mode
         self.state_dir = Path(state_dir)
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self._notify, self._health, self._funding = notify, health, funding
         self._clock, self._sleep = clock, sleep
+        self._on_night_done = on_night_done
         self.qty = float(spec.raw["qty"])
         self.orders_cfg = spec.raw["orders"]
         self._events = self.state_dir / "events.jsonl"
@@ -174,8 +176,10 @@ class Runner:
                 return None
             return b.best_bid if side is Side.BUY else b.best_ask
 
+        start = limit_from if method == "B" and limit_from is not None else market_at
+        self.wait_until(start)
+        self._decision(leg, method, start, top)
         if method == "B" and limit_from is not None:
-            self.wait_until(limit_from)
             reprice = float(self.orders_cfg["B"]["reprice_every"])
             o = None
             while self.now() < market_at and qty - filled() > 1e-9:
@@ -211,6 +215,17 @@ class Runner:
             self.broker.place_market(side, rest, cid, reduce_only=reduce_only)
             self.broker.poll()
         return [f for f in self.broker.fills() if f.client_id in ids]
+
+    def _decision(self, leg: str, method: str, scheduled: datetime, top) -> None:
+        """구간 시작 시점의 최우선 호가 기록 (슬리피지 기준, WOO-99)."""
+        rec = {"event": "decision", "entry_date": self.night.entry_date, "leg": leg, "method": method,
+               "scheduled_at": scheduled.isoformat(), "decided_at": self.now().isoformat()}
+        try:
+            b = self.market.book()
+            rec.update(bid=b.best_bid, ask=b.best_ask, book_ts=b.ts.isoformat())
+        except StaleMarketData as e:
+            rec["book_error"] = str(e)
+        self._log(rec)
 
     def _cancel_quietly(self, cid: str) -> None:
         try:
@@ -309,19 +324,30 @@ class Runner:
         self.broker.record_night(self.night.entry_date, self.night.pnl,
                                  {"method": self.night.method, "how": how, "entry": self.night.entry_price,
                                   "exit": self.night.exit_price, "fees": self.night.fees, "funding": self.night.funding})
-        self._log({"event": "night", **asdict(self.night)})
+        self._log({"event": "night", "spec_version": self.spec.raw["version"], **asdict(self.night)})
         self.history[self.night.entry_date] = asdict(self.night)
         self._save()
+        self._after_night()
         self.alert(f"{self.night.entry_date} {how}: {self.night.entry_price:.2f} → {self.night.exit_price:.2f}, "
                    f"손익 {self.night.pnl:+.4f} USDT (수수료 {self.night.fees:.4f}, 펀딩 {self.night.funding:+.4f}) "
                    f"| 누적 {self.broker.state.cumulative_pnl:+.2f}")
+
+    def _after_night(self) -> None:
+        """밤 리포트(WOO-99). 실패해도 매매 경로에는 영향을 주지 않는다."""
+        if not self._on_night_done:
+            return
+        try:
+            self._on_night_done(self.night.entry_date)
+        except Exception as e:
+            log.exception("밤 리포트 실패")
+            self._log({"event": "report_error", "entry_date": self.night.entry_date, "error": str(e)[:300]})
 
     def _skip(self, reason: str) -> None:
         self.night.phase = "skipped"
         self.night.notes.append(reason)
         self.history[self.night.entry_date] = asdict(self.night)
         self._save()
-        self._log({"event": "night", **asdict(self.night)})
+        self._log({"event": "night", "spec_version": self.spec.raw["version"], **asdict(self.night)})
         self.alert(f"{self.night.entry_date} 밤 스킵: {reason}")
 
     def residual_check(self, n: Night) -> None:
@@ -438,7 +464,9 @@ def build(mode: str, confirm_live: bool, spec_path: Path | None = None) -> Runne
         return {"clock_offset_ms": measure_clock_offset(public, 3)["offset_ms"]}
 
     funding = (lambda s, e, q: inner.funding_between(s, e)) if mode == "live" else public_funding(sym)
-    r = Runner(spec, guard, market, mode, state_dir, notify=notify, health=health, funding=funding)
+    from .report import night_hook
+    r = Runner(spec, guard, market, mode, state_dir, notify=notify, health=health, funding=funding,
+               on_night_done=night_hook(mode, notify, STATE_ROOT))
     r._log({"event": "start", "spec_sha256": spec.sha256, "spec_version": spec.raw["version"]})
     return r
 

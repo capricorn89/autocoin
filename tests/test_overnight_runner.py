@@ -272,3 +272,14 @@ def test_status_survives_exchange_error(tmp_path):
     st = collect_status("live", state_root=tmp_path, now=kst("2026-09-29", "22:00"),
                         agent={"label": "x", "loaded": True}, exchange=boom)
     assert "network" in st["exchange"]["error"]
+
+
+def test_report_hook_failure_does_not_break_night(tmp_path):
+    r, _, _, _ = make(tmp_path, kst("2026-10-12", "15:00"), lambda t: 100.0)
+    def boom(entry_date):
+        raise RuntimeError("db down")
+    r._on_night_done = boom
+    r.run_night(night("2026-10-12"))
+    assert history(tmp_path)["2026-10-12"]["phase"] == "done"
+    kinds = [json.loads(l)["event"] for l in (tmp_path / "events.jsonl").read_text().splitlines()]
+    assert "report_error" in kinds and "decision" in kinds

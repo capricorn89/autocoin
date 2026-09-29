@@ -20,6 +20,7 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 DEFAULT_DSN = "postgresql:///autocoin"
 SCHEMA_SQL = Path(__file__).with_name("schema.sql")
 COMPRESSION_SQL = Path(__file__).with_name("compression.sql")
+EXEC_SQL = Path(__file__).with_name("exec_schema.sql")          # 실행 기록 (WOO-99)
 
 
 def get_dsn(dsn: str | None = None) -> str:
@@ -43,6 +44,7 @@ def ensure_database(dsn: str) -> bool:
 def apply_schema(dsn: str) -> dict:
     with psycopg.connect(dsn, autocommit=True) as conn:
         conn.execute(SCHEMA_SQL.read_text(encoding="utf-8"))
+        conn.execute(EXEC_SQL.read_text(encoding="utf-8"))
         try:
             conn.execute(COMPRESSION_SQL.read_text(encoding="utf-8"))
             compression, error = True, None

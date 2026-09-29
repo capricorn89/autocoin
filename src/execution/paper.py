@@ -205,7 +205,7 @@ class PaperExchange:
         o.filled_qty = round(o.filled_qty + qty, 8)
         o.status = Status.FILLED if o.remaining <= 1e-9 else Status.PARTIALLY_FILLED
         o.updated_ts = ts
-        self._emit(OrderEvent(ts, o.client_id, "filled", {"qty": qty, "price": price, "fee": fee,
+        self._emit(OrderEvent(ts, o.client_id, "filled", {"side": o.side.value, "qty": qty, "price": price, "fee": fee,
                                                           "liquidity": liq.value}))
         self._save()
 
