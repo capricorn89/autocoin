@@ -137,7 +137,7 @@ class BinanceFuturesBroker:
             r = self._recover(client_id, algo=True)
         self._track(o)
         self._apply_algo(o, r)
-        self._emit(OrderEvent(o.placed_ts, client_id, "placed", {"type": "STOP_MARKET", "stop": stop_price}))
+        self._emit(OrderEvent(o.placed_ts, client_id, "placed", {"type": "STOP_MARKET", "stop": o.stop_price}))
         return o
 
     def cancel(self, client_id: str) -> Order:
@@ -250,7 +250,14 @@ class BinanceFuturesBroker:
         self._emit(OrderEvent(o.placed_ts, o.client_id, "placed",
                               {"type": o.type.value, "side": o.side.value, "qty": o.qty, "price": o.price}))
         if o.type is OrderType.MARKET:
-            self._pull_trades()
+            # 체결 내역(userTrades)은 주문 응답보다 늦게 보일 수 있다 (2026-09-29 스모크에서 확인).
+            # 평균가를 바로 쓸 수 있게 최대 ~2초 기다린다
+            import time
+            for _ in range(10):
+                self._pull_trades()
+                if any(f.client_id == o.client_id for f in self._fills):
+                    break
+                time.sleep(0.2)
         return o
 
     def _recover(self, client_id: str, algo: bool) -> dict:
@@ -312,10 +319,22 @@ class BinanceFuturesBroker:
             f = Fill(cid, _ms(int(t["time"])), Side(t["side"]), float(t["qty"]), float(t["price"]), fee,
                      Liquidity.MAKER if t["maker"] else Liquidity.TAKER)
             self._fills.append(f)
+            self._sync_from_fills(cid)
             self._pos_cache.realized_pnl += float(t.get("realizedPnl", 0) or 0)
             self._pos_cache.fees += fee
             self._emit(OrderEvent(f.ts, cid, "filled", {"qty": f.qty, "price": f.price, "fee": fee,
                                                         "liquidity": f.liquidity.value}))
+
+    def _sync_from_fills(self, client_id: str) -> None:
+        """주문 응답의 avgPrice 가 0 으로 오는 경우가 있다 (EWYUSDT 시장가, 2026-09-29 확인).
+        체결 내역이 기준이므로 평균가·체결수량을 체결에서 다시 계산한다."""
+        o = self._orders.get(client_id)
+        mine = [f for f in self._fills if f.client_id == client_id]
+        if o is None or not mine:
+            return
+        qty = sum(f.qty for f in mine)
+        o.avg_price = sum(f.qty * f.price for f in mine) / qty
+        o.filled_qty = max(o.filled_qty, round(qty, 8))
 
     def _emit(self, ev: OrderEvent) -> None:
         for fn in list(self._subs):

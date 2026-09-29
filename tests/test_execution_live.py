@@ -209,3 +209,15 @@ def test_order_records_tick_rounded_prices(br):
     rest.on("POST", "/fapi/v1/algoOrder", {"algoId": 77, "clientAlgoId": "sl", "algoStatus": "NEW"})
     assert b.place_limit_gtx(Side.BUY, 0.03, 182.2506, "b1").price == 182.25
     assert b.place_stop_market(Side.SELL, 0.03, 163.6536, "sl").stop_price == 163.65
+
+
+def test_market_avg_price_taken_from_fills_when_response_is_zero(br):
+    b, rest = br
+    rest.on("POST", "/fapi/v1/order", order_resp("e1", "FILLED", qty="0.03", executed="0.03", avg="0.00", type_="MARKET"))
+    rest.on("GET", "/fapi/v1/userTrades", [
+        {"id": 1, "orderId": 11, "time": 1790000000100, "side": "BUY", "qty": "0.02", "price": "186.06",
+         "commission": "0.0015", "commissionAsset": "USDT", "maker": False},
+        {"id": 2, "orderId": 11, "time": 1790000000101, "side": "BUY", "qty": "0.01", "price": "186.09",
+         "commission": "0.0007", "commissionAsset": "USDT", "maker": False}])
+    o = b.place_market(Side.BUY, 0.03, "e1")
+    assert o.avg_price == pytest.approx((0.02 * 186.06 + 0.01 * 186.09) / 0.03)
