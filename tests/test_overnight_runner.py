@@ -8,7 +8,7 @@ from src.execution.paper import PaperExchange
 from src.execution.risk import RiskGuard, RiskLimits
 from src.execution.types import BookTop, FeeSchedule, Liquidity, Side, TradePrint
 from src.overnight.runner import Runner, calendar_diffs
-from src.overnight.spec import Spec
+from src.overnight.spec import SPEC_PATH, Spec
 
 UTC = timezone.utc
 SPEC = Spec.load()
@@ -48,14 +48,14 @@ class SimMarket:
         return self.path(self.clock())
 
 
-def make(tmp_path, start, path, funding=0.0):
+def make(tmp_path, start, path, funding=0.0, spec=SPEC, exchange_cls=PaperExchange):
     c = Clock(start)
     m = SimMarket(c, path)
-    ex = PaperExchange("EWYUSDT", m, FeeSchedule(0.0, 4.0), clock=c, state_file=tmp_path / "paper.json")
+    ex = exchange_cls("EWYUSDT", m, FeeSchedule(0.0, 4.0), clock=c, state_file=tmp_path / "paper.json")
     alerts = []
-    g = RiskGuard(ex, RiskLimits.from_spec(SPEC.raw["risk"]), tmp_path / "risk.json", tmp_path / "KILL",
+    g = RiskGuard(ex, RiskLimits.from_spec(spec.raw["risk"]), tmp_path / "risk.json", tmp_path / "KILL",
                   alert=alerts.append, clock=c)
-    r = Runner(SPEC, g, m, "paper", tmp_path, notify=alerts.append, health=lambda: {"clock_offset_ms": 0.0},
+    r = Runner(spec, g, m, "paper", tmp_path, notify=alerts.append, health=lambda: {"clock_offset_ms": 0.0},
                funding=lambda s, e, q: funding, clock=c, sleep=c.sleep, calendar_check=lambda s: [])
     return r, c, m, alerts
 
@@ -191,3 +191,42 @@ def test_events_log_written(tmp_path):
     r.run_night(night("2026-10-12"))
     kinds = [json.loads(l)["event"] for l in (tmp_path / "events.jsonl").read_text().splitlines()]
     assert "placed" in kinds and "filled" in kinds and kinds.count("night") == 1
+
+
+SPEC_V2 = Spec.load(SPEC_PATH.with_name("spec_v2.yaml"))
+
+
+class PartialMakerExchange(PaperExchange):
+    """GTX 가 뚫리면 남은 수량의 80% 만 체결 (부분 체결 재현)."""
+
+    def _maybe_fill_limit(self, o, t):
+        through = t.price < o.price if o.side is Side.BUY else t.price > o.price
+        if through and o.filled_qty == 0:
+            self._record_fill(o, round(o.remaining * 0.8, 8), o.price, Liquidity.MAKER, t.ts)
+        elif through:
+            return
+
+
+def test_v2_live_size_and_sub_min_notional_remainder_dropped(tmp_path):
+    n = SPEC_V2.night_for_entry(date(2026, 10, 13))
+    assert n.method == "B" and SPEC_V2.raw["qty"] == 0.1
+
+    def path(t):
+        if t < kst("2026-10-13", "15:30:05"):
+            return 100.0
+        return 99.99 if t < kst("2026-10-14", "08:00") else 101.0
+    r, _, _, _ = make(tmp_path, kst("2026-10-13", "15:00"), path, spec=SPEC_V2, exchange_cls=PartialMakerExchange)
+    r.run_night(n)
+    h = history(tmp_path)["2026-10-13"]
+    # 0.08 maker 체결, 잔량 0.02 × ~100 = $2 < $5 → 시장가로 채우지 않음
+    assert h["qty"] == pytest.approx(0.08)
+    assert any("최소 $5" in x for x in h["notes"])
+    assert [f.client_id for f in r.broker.fills() if f.side is Side.BUY] == ["on-20261013-e0"]
+    assert r.broker.position().qty == 0 and h["phase"] == "done"
+
+
+def test_v2_market_night_uses_small_size(tmp_path):
+    r, _, _, _ = make(tmp_path, kst("2026-10-12", "15:00"), lambda t: 100.0, spec=SPEC_V2)
+    r.run_night(SPEC_V2.night_for_entry(date(2026, 10, 12)))
+    h = history(tmp_path)["2026-10-12"]
+    assert h["qty"] == pytest.approx(0.1) and r.broker.limits.max_abs_position == 0.1

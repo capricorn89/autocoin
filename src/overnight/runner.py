@@ -25,11 +25,13 @@ from ..execution.base import OrderRejected
 from ..execution.market import MarketView, StaleMarketData
 from ..execution.risk import RiskGuard
 from ..execution.types import Fill, OrderType, Side, Status
-from .spec import Night, Spec, SpecError
+from .spec import SPEC_PATH, Night, Spec, SpecError
 
 log = logging.getLogger(__name__)
 REPO = Path(__file__).resolve().parents[2]
 STATE_ROOT = REPO / "data" / "overnight_live"
+# 모드별 기본 스펙: 라이브는 0.1 단위(v2), 페이퍼는 1.00(v1). 2026-09-29 사용자 결정
+DEFAULT_SPEC = {"paper": SPEC_PATH, "live": SPEC_PATH.with_name("spec_v2.yaml")}
 
 
 def _utc_now() -> datetime:
@@ -197,6 +199,12 @@ class Runner:
                 self._cancel_quietly(o.client_id)
         self.wait_until(market_at)
         rest = round(qty - filled(), 8)
+        min_notional = float(self.orders_cfg.get("min_notional_usd", 0.0))
+        if rest > 1e-9 and not reduce_only and filled() > 0 and min_notional:
+            px = top() or 0.0
+            if rest * px < min_notional:                     # 거래소 MIN_NOTIONAL 에 걸려 거부될 잔량
+                self.night.notes.append(f"진입 잔량 {rest} (${rest * px:.2f}) < 최소 ${min_notional:g} — 체결분만 보유")
+                rest = 0.0
         if rest > 1e-9:
             cid = self._cid(leg, 99)
             ids.append(cid)
@@ -404,14 +412,14 @@ def public_funding(symbol: str) -> Callable[[datetime, datetime, float], float]:
     return f
 
 
-def build(mode: str, confirm_live: bool) -> Runner:
+def build(mode: str, confirm_live: bool, spec_path: Path | None = None) -> Runner:
     from ..exchange.rest import FuturesRestClient, measure_clock_offset
     from ..execution.base import make_broker
     from ..execution.market import DbMarketView
     from ..execution.risk import RiskLimits
     from ..execution.types import FeeSchedule
     from ..notify import TelegramNotifier
-    spec = Spec.load()
+    spec = Spec.load(spec_path or DEFAULT_SPEC[mode])
     sym = spec.raw["symbol"]
     fees = FeeSchedule(spec.raw["account"]["fees_bps"]["maker"], spec.raw["account"]["fees_bps"]["taker"])
     state_dir = STATE_ROOT / mode
@@ -441,10 +449,12 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--confirm-live", action="store_true")
     ap.add_argument("--schedule", action="store_true", help="다음 밤 일정만 출력")
     ap.add_argument("--status", action="store_true", help="상태 출력")
+    ap.add_argument("--spec", type=Path, help="스펙 파일 (기본: paper=v1, live=v2)")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if args.schedule:
-        spec = Spec.load()
+        spec = Spec.load(args.spec or DEFAULT_SPEC[args.mode])
+        print(f"스펙 v{spec.raw['version']} ({args.mode}), 수량 {spec.raw['qty']}")
         print("달력 불일치(XKRX):", calendar_diffs(spec) or "없음")
         now = _utc_now()
         for n in [n for n in spec.nights() if n.exit_open > now][:10]:
@@ -458,7 +468,7 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.mode == "live" and not args.confirm_live:
         raise SystemExit("live 모드는 --confirm-live 가 필요합니다.")
-    r = build(args.mode, args.confirm_live)
+    r = build(args.mode, args.confirm_live, args.spec)
     try:
         r.run_forever()
     except Exception as e:

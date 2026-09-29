@@ -5,11 +5,14 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from src.overnight.spec import Spec, SpecError
+from src.overnight.spec import SPEC_PATH, Spec, SpecError
+
+SPEC_V2 = SPEC_PATH.with_name("spec_v2.yaml")
 
 KST = ZoneInfo("Asia/Seoul")
 # spec_v1.yaml 동결 해시. 이 값이 깨지면 v1 을 고친 것이다 → spec_v2.yaml 로 새로 만들 것
 FROZEN_SHA256 = "3f870d0a85a0"
+FROZEN_V2_SHA256 = "1fda3e99af99"   # spec_v2.yaml (라이브 0.1 단위)
 
 
 @pytest.fixture(scope="module")
@@ -101,3 +104,24 @@ def test_order_times_by_method(spec):
     assert tb["exit_flat_deadline"] == kst(b.exit_date, "08:59:50")
     assert ta["entry_give_up"] == kst(a.entry_date, "15:40")
     assert ta["residual_check"] == kst(a.exit_date, "09:05")
+
+
+def _flat(d, prefix=""):
+    out = {}
+    for k, v in d.items():
+        key = f"{prefix}{k}"
+        out.update(_flat(v, key + ".") if isinstance(v, dict) else {key: v})
+    return out
+
+
+def test_spec_v2_differs_from_v1_only_in_size_and_notional():
+    v1, v2 = Spec.load(), Spec.load(SPEC_V2)
+    assert v2.sha256.startswith(FROZEN_V2_SHA256)
+    a, b = _flat(v1.raw), _flat(v2.raw)
+    diff = {k for k in a.keys() | b.keys() if a.get(k) != b.get(k)}
+    assert diff == {"version", "qty", "risk.max_abs_position", "risk.test_stop_cumulative_usd",
+                    "orders.min_notional_usd"}
+    assert b["qty"] == b["risk.max_abs_position"] == 0.1
+    assert b["risk.test_stop_cumulative_usd"] / b["qty"] == a["risk.test_stop_cumulative_usd"] / a["qty"]
+    assert [(n.entry_date, n.method, n.skip) for n in v1.nights()] == \
+           [(n.entry_date, n.method, n.skip) for n in v2.nights()]     # 일정·A/B 배정 동일

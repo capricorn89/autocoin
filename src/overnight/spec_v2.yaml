@@ -1,0 +1,88 @@
+# EWYUSDT 한국 장 기준 밤 보유 — 라이브 스펙 v2 (2026-09-29 동결)
+#
+# v1 과 다른 점 (사용자 결정 2026-09-29: 라이브를 0.1 단위로):
+#   qty 1.00 → 0.10, risk.max_abs_position 1.00 → 0.10,
+#   risk.test_stop_cumulative_usd -37 → -3.7 (명목 -20% 유지),
+#   orders.min_notional_usd 추가 (0.1 이면 부분 체결 잔량이 거래소 최소 $5 미만이 될 수 있다)
+# 나머지(시각·A/B 배정·손절 %·달력·판정 bp 기준)는 v1 과 같다. 라이브는 v2, 페이퍼는 v1.
+# 동결 규칙: 수정 금지. tests/test_overnight_spec.py 가 sha256 과 v1 대비 차이를 고정한다.
+
+version: 2
+frozen_at: "2026-09-29"
+symbol: EWYUSDT
+qty: 0.10                 # EWY 0.1주 (~$18.6). 최소 주문 금액 $5 이상
+
+account:                  # WOO-100 에서 설정·확인. 불일치 시 실행 거부
+  margin_type: ISOLATED
+  leverage: 1
+  multi_assets_margin: false
+  dual_side_position: false
+  fees_bps: {maker: 0.0, taker: 4.0}   # commissionRate 2026-09-29 조회
+
+# ---------------------------------------------------------------- 달력
+# 수동 목록이 기준이다. exchange_calendars XKRX 는 교차검증용(2026-06-03·07-17 휴장을 모름).
+calendar:
+  tz: Asia/Seoul
+  covers: ["2026-09-30", "2027-01-29"]   # 이 구간 밖 날짜는 실행 거부 (목록 갱신 전까지)
+  default_open: "09:00"
+  default_close: "15:30"
+  holidays:                 # 평일 휴장
+    - "2026-10-05"          # 개천절 대체공휴일
+    - "2026-10-09"          # 한글날
+    - "2026-12-25"          # 성탄절
+    - "2026-12-31"          # 연말 휴장
+    - "2027-01-01"          # 신정
+  special_sessions:         # 장시간 예외
+    "2026-11-19": {open: "10:00", close: "16:30"}   # 2027학년도 수능
+    "2027-01-04": {open: "10:00", close: "15:30"}   # 연초 첫 거래일
+
+# ---------------------------------------------------------------- 밤 선택
+nights:
+  skip_if_calendar_days_gte: 4     # 진입일→청산일 달력일 4일 이상(연휴)은 스킵. 일반 주말(3일)은 보유
+  ewy_ex_dividend_dates: []        # iShares 공지 후 입력. 배당락일 전·후 밤 스킵
+  require_ex_dividend_from: "2026-12-01"   # 이 날 이후 진입은 배당락일이 입력돼 있어야 한다
+  ab_seed: "overnight-v1"          # 밤별 주문 방식 A/B 배정 (sha256(seed|진입일) 짝수=A)
+
+# ---------------------------------------------------------------- 주문
+# 오프셋은 초. 진입은 장마감(close) 기준, 청산은 다음 거래일 개장(open) 기준.
+# 백테스트: 진입 ±3분, 청산 -5~0분 구간은 기대수익 차이 없음(76.6~77.6bp/밤). 개장 이후 청산은 분당 ~8bp 손해.
+orders:
+  A:                               # 시장가
+    entry_market_at: 0
+    exit_market_at: -60            # 08:59:00
+  B:                               # GTX(post-only) 1호가, 10초마다 최우선 호가로 재호가 → 시장가 폴백
+    entry_limit_from: 0
+    entry_market_at: 90            # 15:31:30 까지 미체결분 시장가
+    exit_limit_from: -180          # 08:57:00
+    exit_market_at: -30            # 08:59:30
+    reprice_every: 10
+  min_notional_usd: 5.0            # 신규 진입 잔량이 이보다 작으면 시장가로 채우지 않고 체결분만 보유
+                                   # (거래소 MIN_NOTIONAL. reduceOnly 청산 주문은 대상 아님)
+  entry_give_up_at: 600            # 15:40 까지 진입 못 하면 그 밤 스킵
+  exit_flat_deadline: -10          # 08:59:50 까지 flat. 아니면 강제 시장가 + 알림
+  reduce_only_on_exit: true
+  cancel_all_after_exit: true
+
+stop:                              # 진입 체결 직후 서버측 비상 손절
+  type: STOP_MARKET
+  working_type: MARK_PRICE
+  pct_from_entry: -12.0            # 표본 최대역행 -11.4% → 한 번도 안 걸림. 꼬리 보호 전용
+  reduce_only: true
+
+# ---------------------------------------------------------------- 리스크 한도
+risk:
+  max_abs_position: 0.10
+  test_stop_cumulative_usd: -3.7   # 명목 -20% (표본 MDD -18.6%)
+  pause_after_consecutive_losses: 8   # 표본 최장 6
+  max_clock_offset_ms: 1000
+  max_data_stale_s: 30
+  max_consecutive_rejects: 2
+  residual_check_after_open_s: 300    # 개장 5분 후 pos≠0 → 즉시 청산 + incident
+  slippage_review_bps: 10.0           # 10회 평균 슬리피지 초과 시 방식 재검토
+
+# ---------------------------------------------------------------- 판정 (O2 종료 시, WOO-102)
+judgement:
+  on_time_ratio: 1.0               # 모든 밤 정시 실행
+  market_slippage_bps_max: 3.0     # A안 체결가 - 기준가(예정 시각 1분봉 시가), 평균
+  tracking_error_std_bps_max: 10.0 # 밤별 (실제 - 같은 밤 백테스트 재현), 비용 제외
+  b_round_trip_cost_bps_max: 4.0   # B안 실효 왕복 비용(수수료+슬리피지). A안 기대치 ~8.5bp 의 절반
