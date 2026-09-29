@@ -193,3 +193,11 @@ def test_verify_account_reports_mismatch(br):
     bad = b.verify_account({"margin_type": "ISOLATED", "leverage": 1, "multi_assets_margin": False,
                             "dual_side_position": False, "fees_bps": {"maker": 0.0, "taker": 4.0}})
     assert len(bad) == 2 and "margin_type" in bad[0] and "leverage" in bad[1]
+
+
+def test_tradfi_agreement_missing_gives_actionable_reason(br):
+    b, rest = br
+    rest.on("POST", "/fapi/v1/order", err(400, -4411, "Please sign TradFi-Perps agreement contract fapi."))
+    with pytest.raises(OrderRejected, match="약관 미동의"):
+        b.place_limit_gtx(Side.BUY, 0.03, 180.0, "b1")
+    assert "약관" in b.get_order("b1").reason

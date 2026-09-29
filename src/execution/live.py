@@ -30,6 +30,10 @@ _EXPIRE_CODES = {
     -4118: "reduceOnly 거절 (포지션 부족)",
 }
 _UNKNOWN_ORDER = {-2011, -2013}
+# 계정 쪽 원인이라 코드로 풀 수 없는 거부 — 사람이 조치할 내용을 사유에 붙인다
+_ACCOUNT_HINTS = {
+    -4411: "TradFi 무기한 약관 미동의 — 바이낸스 웹/앱 선물 화면에서 사용자가 직접 동의해야 한다",
+}
 _ALGO_STATUS = {"NEW": Status.NEW, "WORKING": Status.NEW, "PARTIALLY_TRIGGERED": Status.NEW,
                 "TRIGGERED": Status.FILLED, "FINISHED": Status.FILLED,
                 "CANCELED": Status.CANCELED, "EXPIRED": Status.EXPIRED, "REJECTED": Status.REJECTED}
@@ -261,6 +265,9 @@ class BinanceFuturesBroker:
             raise
 
     def _reject(self, o: Order, reason: str) -> Order:
+        code = next((c for c in _ACCOUNT_HINTS if reason.startswith(f"{c}:")), None)
+        if code is not None:
+            reason = f"{code}: {_ACCOUNT_HINTS[code]}"
         self._track(o)
         o.status, o.reason = Status.REJECTED, reason
         self._emit(OrderEvent(self._clock(), o.client_id, "rejected", {"reason": reason}))
@@ -347,22 +354,30 @@ def smoke(argv: list[str] | None = None) -> int:
         print("포지션이나 미체결이 있어 중단합니다."); return 1
     bid = float(b.client.get("/fapi/v1/ticker/bookTicker", {"symbol": b.symbol})["bidPrice"])
 
-    o = b.place_limit_gtx(Side.BUY, 0.03, bid * 0.98, f"smk-l-{tag}")
-    time.sleep(2); b.poll()
-    step(f"GTX 매수 대기 ({o.status.value})", o.status is Status.NEW)
-    b.cancel(o.client_id); b.poll()
-    step(f"GTX 취소 ({o.status.value})", o.status is Status.CANCELED)
+    def run(name, fn):
+        """단계 실행. 거부되면 ❌ 로 표시하고 False (예외로 죽지 않고 정리 단계까지 간다)."""
+        try:
+            fn()
+            return True
+        except OrderRejected as e:
+            step(f"{name} 거부: {e}", False)
+            return False
 
-    try:
+    def limit_leg():
+        o = b.place_limit_gtx(Side.BUY, 0.03, bid * 0.98, f"smk-l-{tag}")
+        time.sleep(2); b.poll()
+        step(f"GTX 매수 대기 ({o.status.value})", o.status is Status.NEW)
+        b.cancel(o.client_id); b.poll()
+        step(f"GTX 취소 ({o.status.value})", o.status is Status.CANCELED)
+
+    def stop_leg():
         s = b.place_stop_market(Side.SELL, 0.03, bid * 0.88, f"smk-s-{tag}")
         time.sleep(2); b.poll()
         step(f"Algo 손절 대기 ({s.status.value})", s.status is Status.NEW)
         b.cancel(s.client_id)
         step("Algo 손절 취소", s.status is Status.CANCELED)
-    except OrderRejected as e:
-        step(f"Algo 손절 (포지션 없이 reduceOnly 거절 가능: {e})", False)
 
-    if args.round_trip:
+    def round_trip():
         e = b.place_market(Side.BUY, 0.03, f"smk-e-{tag}")
         step(f"시장가 매수 ({e.status.value} @ {e.avg_price})", e.status is Status.FILLED)
         x = b.place_market(Side.SELL, 0.03, f"smk-x-{tag}", reduce_only=True)
@@ -370,8 +385,18 @@ def smoke(argv: list[str] | None = None) -> int:
         b.poll()
         step(f"체결 {len(b.fills())}건, 수수료 {sum(f.fee for f in b.fills()):.4f} USDT", len(b.fills()) >= 2)
 
-    b.cancel_all() if b.open_orders() else None
-    step("미체결 0 · 포지션 0", not b.open_orders() and b.position().qty == 0)
+    try:
+        if run("GTX 매수", limit_leg):          # 첫 주문이 계정 사유로 거부되면 나머지도 같은 이유라 건너뛴다
+            run("Algo 손절", stop_leg)
+            if args.round_trip:
+                run("시장가 왕복", round_trip)
+    finally:
+        if b.open_orders():
+            b.cancel_all()
+        pos = b.position().qty
+        if pos:
+            b.place_market(Side.SELL if pos > 0 else Side.BUY, abs(pos), f"smk-flat-{tag}", reduce_only=True)
+        step("미체결 0 · 포지션 0", not b.open_orders() and b.position().qty == 0)
     print("통과" if ok else "실패 항목 있음")
     return 0 if ok else 1
 
