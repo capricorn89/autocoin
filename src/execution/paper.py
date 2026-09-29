@@ -62,6 +62,9 @@ class PaperExchange:
     def fills(self) -> list[Fill]:
         return list(self._fills)
 
+    def fills_since(self, since: datetime) -> list[Fill]:
+        return [f for f in self._fills if f.ts >= since]
+
     def touched_at(self, client_id: str) -> datetime | None:
         return self._touched.get(client_id)
 

@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  오버나잇 스케줄러 (페이퍼) launchd 에이전트 — WOO-98 / O1.
+  설치: cp deploy/launchd/com.autocoin.overnight.paper.plist ~/Library/LaunchAgents/
+        launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.autocoin.overnight.paper.plist
+  중지: launchctl bootout gui/$(id -u)/com.autocoin.overnight.paper
+  상태: .venv/bin/python -m src.overnight.runner --status
+
+  - 수집기(com.autocoin.collector)가 DB 에 넣는 호가·체결로 페이퍼 체결을 시뮬한다. 수집기가 먼저 떠 있어야 한다
+  - 종료되면 60초 후 재시작. 재시작하면 data/overnight_live/paper/ 상태 파일로 이어간다
+  - 킬 스위치: touch data/overnight_live/paper/KILL
+  - 라이브용은 따로 만든다 (--mode live --confirm-live). 이 파일은 페이퍼 전용
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.autocoin.overnight.paper</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/woojin/Desktop/autocoin/.venv/bin/python</string>
+        <string>-m</string>
+        <string>src.overnight.runner</string>
+        <string>--mode</string>
+        <string>paper</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/woojin/Desktop/autocoin</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>OBSIDIAN_AUTOJI_PATH</key>
+        <string>/Users/woojin/Library/Mobile Documents/iCloud~md~obsidian/Documents/autoji</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/opt/postgresql@18/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+    <key>ProcessType</key>
+    <string>Standard</string>
+    <key>StandardOutPath</key>
+    <string>/Users/woojin/Desktop/autocoin/logs/overnight.paper.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/woojin/Desktop/autocoin/logs/overnight.paper.err.log</string>
+</dict>
+</plist>

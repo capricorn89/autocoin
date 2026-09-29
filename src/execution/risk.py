@@ -220,6 +220,9 @@ class RiskGuard:
     def subscribe(self, fn: Callable[[OrderEvent], None]) -> None:
         self.broker.subscribe(fn)
 
+    def fills_since(self, since: datetime):
+        return self.broker.fills_since(since)
+
     # ------------------------------------------------------------ 저장
     def _save(self) -> None:
         self._state_file.parent.mkdir(parents=True, exist_ok=True)

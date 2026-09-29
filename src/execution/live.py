@@ -200,6 +200,25 @@ class BinanceFuturesBroker:
     def fills(self) -> list[Fill]:
         return list(self._fills)
 
+    def fills_since(self, since: datetime) -> list[Fill]:
+        """재시작 복구용: since 이후 이 심볼의 체결 전부를 거래소에서 다시 읽는다 (추적하지 않던 주문 포함)."""
+        rows = self.client.get("/fapi/v1/userTrades", {"symbol": self.symbol, "limit": 1000,
+                                                        "startTime": int(since.timestamp() * 1000)}, signed=True)
+        out = []
+        for t in rows:
+            cid = self._by_exchange_id.get(int(t["orderId"]), f"order:{t['orderId']}")
+            fee = float(t["commission"]) if t.get("commissionAsset", "USDT") == "USDT" else 0.0
+            out.append(Fill(cid, _ms(int(t["time"])), Side(t["side"]), float(t["qty"]), float(t["price"]), fee,
+                            Liquidity.MAKER if t["maker"] else Liquidity.TAKER))
+        return out
+
+    def funding_between(self, start: datetime, end: datetime) -> float:
+        """실제 펀딩 입출금 합 (USDT, +받음). income FUNDING_FEE."""
+        rows = self.client.get("/fapi/v1/income", {"symbol": self.symbol, "incomeType": "FUNDING_FEE",
+                                                    "startTime": int(start.timestamp() * 1000),
+                                                    "endTime": int(end.timestamp() * 1000), "limit": 1000}, signed=True)
+        return sum(float(r["income"]) for r in rows)
+
     def subscribe(self, fn: Callable[[OrderEvent], None]) -> None:
         self._subs.append(fn)
 
