@@ -201,3 +201,11 @@ def test_tradfi_agreement_missing_gives_actionable_reason(br):
     with pytest.raises(OrderRejected, match="약관 미동의"):
         b.place_limit_gtx(Side.BUY, 0.03, 180.0, "b1")
     assert "약관" in b.get_order("b1").reason
+
+
+def test_order_records_tick_rounded_prices(br):
+    b, rest = br
+    rest.on("POST", "/fapi/v1/order", order_resp("b1"))
+    rest.on("POST", "/fapi/v1/algoOrder", {"algoId": 77, "clientAlgoId": "sl", "algoStatus": "NEW"})
+    assert b.place_limit_gtx(Side.BUY, 0.03, 182.2506, "b1").price == 182.25
+    assert b.place_stop_market(Side.SELL, 0.03, 163.6536, "sl").stop_price == 163.65

@@ -115,15 +115,16 @@ class BinanceFuturesBroker:
 
     def place_limit_gtx(self, side: Side, qty: float, price: float, client_id: str,
                         reduce_only: bool = False) -> Order:
-        o = Order(client_id, self.symbol, side, OrderType.LIMIT, qty, price=price, reduce_only=reduce_only)
-        return self._place(o, {"type": "LIMIT", "timeInForce": "GTX", "price": self._px(price)})
+        px = self._px(price)                     # 거래소에 보내는 틱 단위 값을 주문에도 기록
+        o = Order(client_id, self.symbol, side, OrderType.LIMIT, qty, price=float(px), reduce_only=reduce_only)
+        return self._place(o, {"type": "LIMIT", "timeInForce": "GTX", "price": px})
 
     def place_stop_market(self, side: Side, qty: float, stop_price: float, client_id: str) -> Order:
         """서버측 비상 손절. Algo 주문, 표시가(MARK_PRICE) 기준, reduceOnly. priceProtect 는 끈다
         (보호 조건 때문에 급변 시 발동이 막히면 비상 손절의 의미가 없다)."""
         if client_id in self._orders:
             return self._orders[client_id]
-        o = Order(client_id, self.symbol, side, OrderType.STOP_MARKET, qty, stop_price=stop_price,
+        o = Order(client_id, self.symbol, side, OrderType.STOP_MARKET, qty, stop_price=float(self._px(stop_price)),
                   reduce_only=True, placed_ts=self._clock())
         params = {"algoType": "CONDITIONAL", "symbol": self.symbol, "side": side.value, "type": "STOP_MARKET",
                   "quantity": self._qty(qty), "triggerPrice": self._px(stop_price), "workingType": "MARK_PRICE",
