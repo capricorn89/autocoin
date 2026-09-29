@@ -458,7 +458,13 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.mode == "live" and not args.confirm_live:
         raise SystemExit("live 모드는 --confirm-live 가 필요합니다.")
-    build(args.mode, args.confirm_live).run_forever()
+    r = build(args.mode, args.confirm_live)
+    try:
+        r.run_forever()
+    except Exception as e:
+        # launchd 가 60초 뒤 재시작하고 recover() 로 이어가지만, 죽은 사실은 사람이 알아야 한다
+        r.alert(f"스케줄러 예외 종료 ({type(e).__name__}: {str(e)[:200]}) — launchd 재시작 후 복구 예정")
+        raise
 
 
 if __name__ == "__main__":
