@@ -443,6 +443,142 @@ def build(mode: str, confirm_live: bool, spec_path: Path | None = None) -> Runne
     return r
 
 
+# ---------------------------------------------------------------- 상태 보기
+def agent_info(mode: str) -> dict:
+    """launchd 에이전트 상태 (state, pid, last exit). 등록 안 됐으면 loaded=False."""
+    import os
+    import subprocess
+    label = f"com.autocoin.overnight.{mode}"
+    r = subprocess.run(["launchctl", "print", f"gui/{os.getuid()}/{label}"], capture_output=True, text=True)
+    if r.returncode != 0:
+        return {"label": label, "loaded": False}
+    info = {"label": label, "loaded": True}
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        for key in ("state", "pid", "last exit code"):
+            if line.startswith(f"{key} =") and key not in info:
+                info[key] = line.split("=", 1)[1].strip()
+    return info
+
+
+def collect_status(mode: str, spec_path: Path | None = None, state_root: Path | None = None,
+                   now: datetime | None = None, agent: dict | None = None,
+                   exchange: Callable[[], dict] | None = None) -> dict:
+    """상태를 모은다 (출력은 status_text). 인자로 주입하면 launchctl·거래소 없이 테스트할 수 있다."""
+    spec = Spec.load(spec_path or DEFAULT_SPEC[mode])
+    d = (state_root or STATE_ROOT) / mode
+    now = now or _utc_now()
+    read = lambda name: json.loads((d / name).read_text()) if (d / name).exists() else None
+    runner, risk = read("runner.json"), read("risk.json")
+    history = (runner or {}).get("history", {})
+    upcoming = []
+    for n in spec.nights():
+        if n.exit_open <= now or n.entry_date.isoformat() in history:
+            continue
+        item = {"entry_date": n.entry_date.isoformat(), "exit_date": n.exit_date.isoformat(),
+                "method": n.method, "skip": n.skip}
+        if not n.skip:
+            t = spec.order_times(n)
+            item["entry_at"] = t.get("entry_limit", t["entry_market"])
+            item["exit_at"] = t.get("exit_limit", t["exit_market"])
+        upcoming.append(item)
+        if len([u for u in upcoming if not u["skip"]]) >= 3:
+            break
+    events = []
+    if (d / "events.jsonl").exists():
+        events = [json.loads(l) for l in (d / "events.jsonl").read_text().splitlines()[-5:] if l.strip()]
+    done = [h for h in history.values() if h.get("phase") == "done"]
+    ex = None
+    if exchange is not None:
+        try:
+            ex = exchange()
+        except Exception as e:                               # 상태 보기가 조회 실패로 죽지 않게
+            ex = {"error": f"{type(e).__name__}: {str(e)[:120]}"}
+    return {
+        "mode": mode, "now": now,
+        "agent": agent if agent is not None else agent_info(mode),
+        "spec": {"version": spec.raw["version"], "sha": spec.sha256[:12], "qty": spec.raw["qty"],
+                 "covers": [x.isoformat() for x in spec.covers]},
+        "kill": (d / "KILL").exists(),
+        "night": (runner or {}).get("night"),
+        "nights_done": len(done), "nights_skipped": sum(h.get("phase") == "skipped" for h in history.values()),
+        "risk": risk or {"status": "active", "reason": "(기록 없음 — 첫 밤 전)", "cumulative_pnl": 0.0,
+                         "consecutive_losses": 0},
+        "risk_limit": spec.raw["risk"]["test_stop_cumulative_usd"],
+        "upcoming": upcoming, "events": events, "exchange": ex,
+    }
+
+
+def status_text(mode: str, spec_path: Path | None = None, exchange: bool = True, **kw) -> str:
+    ex_fn = None
+    if exchange:
+        if mode == "live":
+            def ex_fn():
+                from ..execution.live import BinanceFuturesBroker
+                b = BinanceFuturesBroker(Spec.load(spec_path or DEFAULT_SPEC[mode]).raw["symbol"])
+                p = b.position()
+                return {"position": p.qty, "entry_price": p.entry_price,
+                        "open_orders": [f"{o.type.value} {o.side.value} {o.qty} @ {o.price or o.stop_price}"
+                                        for o in b.open_orders()]}
+        else:
+            def ex_fn():
+                f = (kw.get("state_root") or STATE_ROOT) / mode / "paper_exchange.json"
+                if not f.exists():
+                    return {"position": 0.0, "open_orders": [], "note": "페이퍼 거래소 상태 없음 (첫 주문 전)"}
+                s = json.loads(f.read_text())
+                return {"position": s["position"]["qty"], "entry_price": s["position"]["entry_price"],
+                        "open_orders": [f"{o['type']} {o['side']} {o['qty']} @ {o['price'] or o['stop_price']}"
+                                        for o in s["orders"] if o["status"] in ("NEW", "PARTIALLY_FILLED")]}
+    st = collect_status(mode, spec_path, exchange=ex_fn, **kw)
+    kst = Spec.load(spec_path or DEFAULT_SPEC[mode]).tz
+    fmt = lambda t: t.astimezone(kst).strftime("%m-%d %H:%M:%S")
+    a = st["agent"]
+    lines = [f"■ overnight {mode}  (지금 {fmt(st['now'])} KST)"]
+    if a.get("loaded"):
+        lines.append(f"  에이전트  {a['label']}: {a.get('state', '?')}, pid {a.get('pid', '-')}, "
+                     f"마지막 종료 {a.get('last exit code', '-')}")
+    else:
+        lines.append(f"  에이전트  {a['label']}: ⚠️ 등록 안 됨")
+    sp = st["spec"]
+    lines.append(f"  스펙      v{sp['version']} ({sp['sha']}), 수량 {sp['qty']}, 달력 {sp['covers'][0]}~{sp['covers'][1]}")
+    r = st["risk"]
+    lines.append(f"  리스크    {r['status']} {r.get('reason', '')}".rstrip())
+    lines.append(f"            누적 {r.get('cumulative_pnl', 0):+.4f} USDT (중단선 {st['risk_limit']:+g}), "
+                 f"연속 손실 {r.get('consecutive_losses', 0)}, 완료 {st['nights_done']}밤 / 스킵 {st['nights_skipped']}밤")
+    if st["kill"]:
+        lines.append("  ⛔ 킬 스위치 파일 있음 — 신규 진입 금지")
+    n = st["night"]
+    if n and n.get("phase") not in ("done", "skipped"):
+        lines.append(f"  현재 밤    {n['entry_date']} [{n['method']}] {n['phase']}"
+                     + (f", {n['qty']} @ {n['entry_price']:.2f}, 손절 {n['stop_price']}" if n.get("qty") else ""))
+    elif n:
+        lines.append(f"  직전 밤    {n['entry_date']} [{n['method']}] {n['phase']}"
+                     + (f", 손익 {n['pnl']:+.4f}" if n.get("pnl") is not None else "")
+                     + (f" — {n['notes'][-1]}" if n.get("notes") else ""))
+    ex = st["exchange"]
+    if ex is not None:
+        if "error" in ex:
+            lines.append(f"  거래소    조회 실패: {ex['error']}")
+        else:
+            lines.append(f"  거래소    포지션 {ex['position']}"
+                         + (f" @ {ex['entry_price']:.2f}" if ex.get("position") else "")
+                         + f", 미체결 {len(ex['open_orders'])}건" + (f" {ex['open_orders']}" if ex["open_orders"] else "")
+                         + (f" ({ex['note']})" if ex.get("note") else ""))
+    lines.append("  다음 밤")
+    for u in st["upcoming"]:
+        if u["skip"]:
+            lines.append(f"    {u['entry_date']} → {u['exit_date']}  스킵: {u['skip']}")
+        else:
+            lines.append(f"    {u['entry_date']} → {u['exit_date']}  [{u['method']}] 진입 {fmt(u['entry_at'])} / 청산 {fmt(u['exit_at'])}")
+    if st["events"]:
+        lines.append("  최근 이벤트")
+        for e in st["events"]:
+            detail = {k: v for k, v in e.items() if k not in ("logged_at", "mode", "event")}
+            txt = e.get("text") or ", ".join(f"{k}={v}" for k, v in list(detail.items())[:4])
+            lines.append(f"    {fmt(datetime.fromisoformat(e['logged_at']))} {e['event']}: {txt}"[:160])
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="python -m src.overnight.runner")
     ap.add_argument("--mode", choices=["paper", "live"], default="paper")
@@ -450,6 +586,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--schedule", action="store_true", help="다음 밤 일정만 출력")
     ap.add_argument("--status", action="store_true", help="상태 출력")
     ap.add_argument("--spec", type=Path, help="스펙 파일 (기본: paper=v1, live=v2)")
+    ap.add_argument("--no-exchange", action="store_true", help="--status 에서 거래소 조회 생략")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if args.schedule:
@@ -461,10 +598,7 @@ def main(argv: list[str] | None = None) -> None:
             print(n.entry_date, "→", n.exit_date, n.method or "-", n.skip or "")
         return
     if args.status:
-        d = STATE_ROOT / args.mode
-        for name in ("runner.json", "risk.json"):
-            p = d / name
-            print(f"--- {p}\n{p.read_text() if p.exists() else '(없음)'}")
+        print(status_text(args.mode, args.spec, exchange=not args.no_exchange))
         return
     if args.mode == "live" and not args.confirm_live:
         raise SystemExit("live 모드는 --confirm-live 가 필요합니다.")

@@ -230,3 +230,45 @@ def test_v2_market_night_uses_small_size(tmp_path):
     r.run_night(SPEC_V2.night_for_entry(date(2026, 10, 12)))
     h = history(tmp_path)["2026-10-12"]
     assert h["qty"] == pytest.approx(0.1) and r.broker.limits.max_abs_position == 0.1
+
+
+# ---------------------------------------------------------------- --status
+from src.overnight.runner import collect_status, status_text
+
+
+def test_status_before_first_night(tmp_path):
+    (tmp_path / "live").mkdir()
+    txt = status_text("live", exchange=False, state_root=tmp_path, now=kst("2026-09-29", "22:00"),
+                      agent={"label": "com.autocoin.overnight.live", "loaded": True, "state": "running", "pid": "1"})
+    assert "v2" in txt and "수량 0.1" in txt and "첫 밤 전" in txt
+    assert "2026-09-30 → 2026-10-01  [A] 진입 09-30 15:30:00 / 청산 10-01 08:59:00" in txt
+    assert "스킵: 연휴 4일" in txt
+
+
+def test_status_flags_unloaded_agent_and_kill(tmp_path):
+    (tmp_path / "paper").mkdir()
+    (tmp_path / "paper" / "KILL").touch()
+    txt = status_text("paper", exchange=False, state_root=tmp_path, now=kst("2026-09-29", "22:00"),
+                      agent={"label": "com.autocoin.overnight.paper", "loaded": False})
+    assert "등록 안 됨" in txt and "킬 스위치" in txt
+
+
+def test_status_mid_night_and_upcoming_excludes_done(tmp_path):
+    r, c, _, _ = make(tmp_path / "paper", kst("2026-10-12", "15:00"), lambda t: 100.0)
+    r.run_night(night("2026-10-12"))
+    st = collect_status("paper", state_root=tmp_path, now=kst("2026-10-13", "12:00"),
+                        agent={"label": "x", "loaded": True})
+    assert st["nights_done"] == 1 and st["risk"]["cumulative_pnl"] != 0
+    assert st["upcoming"][0]["entry_date"] == "2026-10-13"
+    txt = status_text("paper", state_root=tmp_path, now=kst("2026-10-13", "12:00"),
+                      agent={"label": "x", "loaded": True})
+    assert "직전 밤    2026-10-12 [A] done, 손익" in txt and "거래소    포지션 0.0" in txt
+
+
+def test_status_survives_exchange_error(tmp_path):
+    (tmp_path / "live").mkdir()
+    def boom():
+        raise RuntimeError("network")
+    st = collect_status("live", state_root=tmp_path, now=kst("2026-09-29", "22:00"),
+                        agent={"label": "x", "loaded": True}, exchange=boom)
+    assert "network" in st["exchange"]["error"]
