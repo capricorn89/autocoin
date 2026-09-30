@@ -240,7 +240,7 @@ def test_status_before_first_night(tmp_path):
     (tmp_path / "live").mkdir()
     txt = status_text("live", exchange=False, state_root=tmp_path, now=kst("2026-09-29", "22:00"),
                       agent={"label": "com.autocoin.overnight.live", "loaded": True, "state": "running", "pid": "1"})
-    assert "v2" in txt and "수량 0.1" in txt and "첫 밤 전" in txt
+    assert "v3" in txt and "수량 0.1" in txt and "첫 밤 전" in txt
     assert "2026-09-30 → 2026-10-01  [A] 진입 09-30 15:30:00 / 청산 10-01 08:59:00" in txt
     assert "스킵: 연휴 4일" in txt
 

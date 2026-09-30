@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 REPO = Path(__file__).resolve().parents[2]
 STATE_ROOT = REPO / "data" / "overnight_live"
 # 모드별 기본 스펙: 라이브는 0.1 단위(v2), 페이퍼는 1.00(v1). 2026-09-29 사용자 결정
-DEFAULT_SPEC = {"paper": SPEC_PATH, "live": SPEC_PATH.with_name("spec_v2.yaml")}
+DEFAULT_SPEC = {"paper": SPEC_PATH, "live": SPEC_PATH.with_name("spec_v3.yaml")}
 
 
 def _utc_now() -> datetime:

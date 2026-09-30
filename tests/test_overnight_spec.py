@@ -8,11 +8,13 @@ import pytest
 from src.overnight.spec import SPEC_PATH, Spec, SpecError
 
 SPEC_V2 = SPEC_PATH.with_name("spec_v2.yaml")
+SPEC_V3 = SPEC_PATH.with_name("spec_v3.yaml")
 
 KST = ZoneInfo("Asia/Seoul")
 # spec_v1.yaml 동결 해시. 이 값이 깨지면 v1 을 고친 것이다 → spec_v2.yaml 로 새로 만들 것
 FROZEN_SHA256 = "3f870d0a85a0"
 FROZEN_V2_SHA256 = "1fda3e99af99"   # spec_v2.yaml (라이브 0.1 단위)
+FROZEN_V3_SHA256 = "965e5020917d"   # spec_v3.yaml (시계 오프셋 한도 5000ms)
 
 
 @pytest.fixture(scope="module")
@@ -125,3 +127,14 @@ def test_spec_v2_differs_from_v1_only_in_size_and_notional():
     assert b["risk.test_stop_cumulative_usd"] / b["qty"] == a["risk.test_stop_cumulative_usd"] / a["qty"]
     assert [(n.entry_date, n.method, n.skip) for n in v1.nights()] == \
            [(n.entry_date, n.method, n.skip) for n in v2.nights()]     # 일정·A/B 배정 동일
+
+
+def test_spec_v3_differs_from_v2_only_in_clock_offset():
+    v2, v3 = Spec.load(SPEC_V2), Spec.load(SPEC_V3)
+    assert v3.sha256.startswith(FROZEN_V3_SHA256)
+    a, b = _flat(v2.raw), _flat(v3.raw)
+    diff = {k for k in a.keys() | b.keys() if a.get(k) != b.get(k)}
+    assert diff == {"version", "frozen_at", "risk.max_clock_offset_ms"}
+    assert b["risk.max_clock_offset_ms"] == 5000
+    assert [(n.entry_date, n.method, n.skip) for n in v2.nights()] == \
+           [(n.entry_date, n.method, n.skip) for n in v3.nights()]
