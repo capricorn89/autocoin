@@ -15,8 +15,9 @@ autocoin 저장소(`~/Desktop/autocoin`)에 **pastofi 코인판 로직1(급등 �
   기간은 9/24~10/18(EWY는 9/16~), 수수료 전 평균 +11.8bp, 왕복 8bp를 빼면 합계 +223bp다.
   단 10/13 하루를 빼면 −17bp로, 수수료 후 우위는 통계적으로 약하다. **이건 라이브 검증용이다.** 10/19부터가 표본 밖이다.
 - 수집기: 4종목 모두 Binance USDT-M 무기한이다(`src/exchange/ws.py`, `fstream.binance.com`, depth@100ms + aggTrade). 현물은 없다.
-- 기존 라이브: `src/overnight/`(EWYUSDT 밤 보유, launchd `com.autocoin.overnight.live`, 스펙 동결 yaml + sha256 테스트,
-  `src/execution/{live,risk,paper}.py`의 RiskGuard). **이 구조와 관례를 최대한 재사용해라.**
+- 이전 라이브: `src/overnight/`(EWYUSDT 밤 보유, 스펙 동결 yaml + sha256 테스트, `src/execution/{live,risk,paper}.py`의 RiskGuard).
+  **2026-10-20에 사용자가 껐다**(live·paper launchd 에이전트 모두 내림). 이제 이 계정에서 실주문을 내는 건 이 전략뿐이다.
+  overnight의 구조와 관례는 최대한 재사용하되, overnight 코드·스펙은 건드리지 마라.
 
 ## 전략 스펙 (pastofi-crypto-1.0으로 동결)
 | 항목 | 값 |
@@ -24,7 +25,7 @@ autocoin 저장소(`~/Desktop/autocoin`)에 **pastofi 코인판 로직1(급등 �
 | 종목 | BTCUSDT, ETHUSDT, SOLUSDT, EWYUSDT (USDT-M 무기한, 신호와 체결 모두 같은 계약) |
 | 입력 | 수집기와 같은 소스. depth@100ms 로컬 오더북의 1호가(bid1, bidq1, ask1, askq1)가 바뀔 때마다 한 건, aggTrade(side = −1 if m else +1) |
 | 시계 | 거래소 시각(depth 이벤트 `T`, aggTrade `T`), UTC 자정부터의 초. **UTC 날짜마다 엔진을 새로 만든다**(백테스트와 같게) |
-| 수량 배율 | 호가 잔량과 체결량에 같이 ×1000을 곱한다(engine `on_trade`가 int로 자른다. 비율은 불변) |
+| 수량 배율 | 엔진에 넣는 호가 잔량과 체결량에 **둘 다** ×1000을 곱한다. 엔진 `on_trade`는 KRX용이라 체결량을 정수로 자르는데, 코인 수량은 0.003 BTC처럼 소수라 그대로 넣으면 0이 된다. OFI 비율은 잔량÷체결량이라 둘에 같은 배율을 곱하면 값이 그대로다. 한쪽만 곱하면 비율이 1000배 틀어진다. 이 배율은 주문 수량과 무관하다 |
 | 급등 | past = (ln mid(T−1) − ln mid(T−301)) × 1e4 ≥ **70bp** |
 | OFI | (T−61, T−1] 안 1호가 OFI 합(Cont·Kukanov·Stoikov). 1.3 그대로 |
 | 거래량 | (T−661, T−61] 방향 있는 체결량 합 ÷ 10 |
@@ -52,11 +53,16 @@ autocoin 저장소(`~/Desktop/autocoin`)에 **pastofi 코인판 로직1(급등 �
 시작 시 exchangeInfo로 다시 계산해 로그에 남기고, 스펙 yaml의 상한(종목별 max_qty)을 넘으면 실행을 거부한다.
 
 ## 착수 전 확인 (나에게 물어볼 것)
-1. **EWY 충돌.** 계정은 one-way 모드라 overnight 라이브의 EWY 롱과 이 전략의 EWY 숏이 상계된다.
-   제안: EWY는 KST 15:20~09:05에는 진입하지 않고, 진입 직전 positionRisk의 EWY 포지션이 0이 아니면 건너뛴다. 아니면 EWY를 빼거나 서브계정을 쓴다.
-2. **누적 손실 정지선.** 제안: 실현 손익 누적 −$5 → 신규 진입 중단 + 알림. 하루 최대 진입 수도 정한다(제안: 종목당 10).
-3. **수량 표**(위 규칙) 그대로 갈지.
-4. **페이퍼 리허설.** 라이브 전에 몇 시간 돌려 신호가 재생 결과와 같은지 볼지.
+1. **누적 손실 정지선.** 제안: 실현 손익 누적 −$5 → 신규 진입 중단 + 알림. 하루 최대 진입 수도 정한다(제안: 종목당 10).
+2. **수량 표**(위 규칙) 그대로 갈지.
+3. **페이퍼 리허설.** 라이브 전에 몇 시간 돌려 신호가 재생 결과와 같은지 볼지.
+
+## 계정 단독 사용 점검
+overnight 라이브는 꺼졌지만, 계정은 one-way 모드라 다른 프로그램이 같은 종목을 잡으면 포지션이 상계된다. 그래서:
+- 시작 시 4종목 positionRisk와 미체결 주문을 조회한다. 이 전략의 clientOrderId가 아닌 포지션이나 주문이 있으면(예: overnight가 남긴 EWY 롱)
+  **실행을 거부하고 알린다.** 내가 정리한 뒤 다시 시작한다.
+- 시작 시 `launchctl list`에 `com.autocoin.overnight.live`가 떠 있으면 실행을 거부한다.
+- 진입 직전 그 종목 포지션이 0이 아니고 이 전략 장부와도 맞지 않으면 진입하지 않고 알린다.
 
 ## 구현 요구
 - **일치 검증(필수).** 실시간 코드 경로(WS 메시지 → 엔진)를 DB 재생으로 돌려 `all_trades_*.csv`의 A·로직1 59건을
