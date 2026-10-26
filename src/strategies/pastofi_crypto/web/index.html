@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1115">
+<title>pastofi 모니터</title>
+<style>
+:root {
+  --bg: #f5f6f8; --card: #ffffff; --ink: #14171c; --muted: #6b7280; --line: #e5e7eb;
+  --up: #0f9d58; --down: #d93025; --warn: #b26a00; --accent: #2f6fed; --chip: #eef1f5;
+  --bar: #dfe3ea;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1115; --card: #181b21; --ink: #e8eaed; --muted: #9aa0a6; --line: #2a2e36;
+    --up: #34c37a; --down: #ff6b5e; --warn: #f0b04a; --accent: #7aa2ff; --chip: #23272f; --bar: #2c313a;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Segoe UI", sans-serif;
+  padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+.num { font-variant-numeric: tabular-nums; }
+header { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 10px 16px 8px;
+  display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); }
+header h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: -.01em; }
+.mode { font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--chip); }
+.mode.live { background: var(--down); color: #fff; }
+.tabs { margin-left: auto; display: flex; gap: 4px; }
+.tabs a { font-size: 12px; color: var(--muted); text-decoration: none; padding: 3px 8px; border-radius: 6px; }
+.tabs a.on { background: var(--chip); color: var(--ink); font-weight: 600; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.ok { background: var(--up); } .dot.bad { background: var(--down); } .dot.warn { background: var(--warn); }
+main { padding: 12px 16px 40px; max-width: 980px; margin: 0 auto; }
+.sub { color: var(--muted); font-size: 12.5px; }
+.banner { border-radius: 10px; padding: 10px 12px; margin: 0 0 12px; font-size: 14px; white-space: pre-wrap; }
+.banner.halt { background: color-mix(in srgb, var(--down) 15%, var(--card)); border: 1px solid var(--down); }
+.banner.warn { background: color-mix(in srgb, var(--warn) 14%, var(--card)); border: 1px solid var(--warn); }
+.banner.info { background: color-mix(in srgb, var(--accent) 12%, var(--card)); border: 1px solid var(--accent); }
+.kpis { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 12px; }
+@media (min-width: 640px) { .kpis { grid-template-columns: repeat(5, 1fr); } }
+.kpi { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+.kpi .l { font-size: 12px; color: var(--muted); }
+.kpi .v { font-size: 20px; font-weight: 650; letter-spacing: -.01em; margin-top: 2px; }
+.kpi .s { font-size: 12px; color: var(--muted); margin-top: 1px; }
+.up { color: var(--up); } .down { color: var(--down); }
+h2 { font-size: 14px; margin: 20px 0 8px; color: var(--muted); font-weight: 600; letter-spacing: .01em; }
+.cards { display: grid; grid-template-columns: 1fr; gap: 8px; }
+@media (min-width: 640px) { .cards { grid-template-columns: 1fr 1fr; } }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+.card .top { display: flex; align-items: baseline; gap: 8px; }
+.card .sym { font-weight: 700; font-size: 16px; }
+.card .mid { margin-left: auto; font-size: 15px; }
+.pos { margin: 8px 0 4px; padding: 8px 10px; border-radius: 8px; background: var(--chip); font-size: 14px; }
+.pos.flat { color: var(--muted); }
+.meter { margin-top: 8px; }
+.meter .row { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--muted); }
+.meter .row b { color: var(--ink); font-weight: 600; }
+.track { position: relative; height: 6px; border-radius: 3px; background: var(--bar); margin-top: 3px; overflow: hidden; }
+.track i { position: absolute; top: 0; bottom: 0; left: 0; background: var(--accent); border-radius: 3px; }
+.track i.hit { background: var(--down); }
+.foot { display: flex; justify-content: space-between; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.gate { color: var(--warn); }
+.panel { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+canvas { width: 100%; height: 180px; display: block; }
+.scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; white-space: nowrap; }
+th, td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+th { font-weight: 600; color: var(--muted); font-size: 12px; }
+th:first-child, td:first-child, td.l, th.l { text-align: left; }
+tr:last-child td { border-bottom: none; }
+.empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
+.legend { display: flex; gap: 12px; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.legend span::before { content: ""; display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 5px;
+  vertical-align: middle; background: var(--c); }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="dot"></span>
+  <h1>pastofi 코인판</h1>
+  <span class="mode" id="mode">-</span>
+  <nav class="tabs" id="tabs"></nav>
+</header>
+<main>
+  <div class="sub num" id="status">불러오는 중…</div>
+  <div id="banners" style="margin-top:10px"></div>
+  <section class="kpis" id="kpis"></section>
+  <h2>종목</h2>
+  <section class="cards" id="cards"></section>
+  <h2>누적 손익</h2>
+  <div class="panel">
+    <div class="legend"><span style="--c:var(--accent)">수수료 후</span><span style="--c:var(--muted)">수수료 전</span></div>
+    <canvas id="chart"></canvas>
+  </div>
+  <h2>날짜별 손익 (UTC)</h2>
+  <div class="panel scroll" id="daily"></div>
+  <h2>거래 내역</h2>
+  <div class="panel scroll" id="trades"></div>
+  <h2>일치 대조 (백테스트 재생 vs 실행)</h2>
+  <div class="panel scroll" id="recon"></div>
+  <h2>최근 신호 (건너뛴 것 포함)</h2>
+  <div class="panel scroll" id="signals"></div>
+  <p class="sub" style="margin-top:16px">10초마다 새로 고칩니다. 이 페이지는 tailnet 안에서만 열립니다.</p>
+</main>
+<script>
+const qs = new URLSearchParams(location.search);
+const MODE = qs.get("mode") || "paper";
+const SHORT = s => s.replace("USDT", "");
+const $ = id => document.getElementById(id);
+let data = null, fetchedAt = 0;
+
+const fmt = (x, nd = 2) => x == null || isNaN(x) ? "-" : Number(x).toLocaleString("en-US", {minimumFractionDigits: nd, maximumFractionDigits: nd});
+const sgn = (x, nd = 1, unit = "") => x == null || isNaN(x) ? "-" : (x > 0 ? "+" : x < 0 ? "−" : "") + fmt(Math.abs(x), nd) + unit;
+const usd = (x, nd = 2) => x == null || isNaN(x) ? "-" : (x > 0 ? "+" : x < 0 ? "−" : "") + "$" + fmt(Math.abs(x), nd);
+const cls = x => x > 0 ? "up" : x < 0 ? "down" : "";
+const px = x => x == null ? "-" : (x >= 1000 ? fmt(x, 2) : String(+Number(x).toPrecision(6)));
+const t2 = (e, f = "md hms") => {
+  if (!e) return "-";
+  const d = new Date(e * 1000), p = n => String(n).padStart(2, "0");
+  const md = `${p(d.getUTCMonth() + 1)}/${p(d.getUTCDate())}`, hms = `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+  return f === "hms" ? hms : f === "md" ? md : `${md} ${hms}`;
+};
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+
+async function load() {
+  try {
+    const r = await fetch(`/api/all?mode=${MODE}`, {cache: "no-store"});
+    data = await r.json(); fetchedAt = Date.now() / 1000;
+    render();
+  } catch (e) { $("status").textContent = "서버에 연결하지 못했습니다: " + e; $("dot").className = "dot bad"; }
+}
+
+function render() {
+  const s = data.state || {};
+  $("mode").textContent = MODE.toUpperCase();
+  $("mode").className = "mode" + (MODE === "live" ? " live" : "");
+  $("tabs").innerHTML = (data.modes || []).map(m => `<a class="${m === MODE ? "on" : ""}" href="?mode=${m}">${m.toUpperCase()}</a>`).join("");
+  if (s.missing) { $("status").textContent = `${MODE} 실행 기록이 아직 없습니다.`; return; }
+  const age = s.age_s ?? 999;
+  $("dot").className = "dot " + (age < 5 ? "ok" : age < 30 ? "warn" : "bad");
+  const lat = Object.values(s.symbols || {}).map(v => v.depth_latency_ms).filter(x => x != null);
+  const maxLat = lat.length ? Math.max(...lat) : null;
+  $("status").innerHTML = `하트비트 ${age < 60 ? Math.round(age) + "초" : Math.round(age / 60) + "분"} 전 · WS 지연 ${maxLat == null ? "-" : Math.round(maxLat) + "ms"}`
+    + ` · 시계 오프셋 ${s.clock_offset_ms == null ? "-" : Math.round(s.clock_offset_ms) + "ms"} · ${esc(s.spec_version)} · 수량 ${esc(s.qty)}`;
+
+  const a = s.account || {}, tr = s.trial || {};
+  const b = [];
+  if (age > 30) b.push(`<div class="banner halt">매매 프로세스 하트비트가 ${Math.round(age)}초 동안 없습니다. 프로세스를 확인해 주세요.</div>`);
+  if (a.halted) b.push(`<div class="banner halt">⛔ 정지선 도달 — 신규 진입을 멈췄습니다. ${esc(a.halt_reason)}</div>`);
+  if (s.kill) b.push(`<div class="banner halt">⛔ KILL 파일이 있어 신규 진입을 하지 않습니다.</div>`);
+  (s.exchange_warnings || []).forEach(w => b.push(`<div class="banner warn">⚠️ ${esc(w)}</div>`));
+  if (s.ws && (!s.ws.depth || !s.ws.trade)) b.push(`<div class="banner warn">WS 연결 상태: 호가 ${s.ws.depth ? "정상" : "끊김"} · 체결 ${s.ws.trade ? "정상" : "끊김"}</div>`);
+  if (s.report_text) b.push(`<div class="banner info"><b>📋 페이퍼 ${tr.days}일 요약</b>\n${esc(s.report_text)}</div>`);
+  $("banners").innerHTML = b.join("");
+
+  const day = tr.start ? Math.min(Math.floor((Date.now() / 1000 - tr.start) / 86400) + 1, 999) : null;
+  const left = a.cum - a.stop;
+  const kp = [
+    ["잔고", "$" + fmt(a.balance, 2), MODE === "live" ? "거래소 지갑" : "가정 시작 $200"],
+    ["오늘 실현 (UTC)", `<span class="${cls(a.today)}">${usd(a.today, 4)}</span>`, `${a.today_n || 0}건 · 승 ${a.today_win || 0} / 패 ${a.today_loss || 0}`],
+    ["누적 실현", `<span class="${cls(a.cum)}">${usd(a.cum, 4)}</span>`, `${a.n_trades || 0}건 · 수수료 $${fmt(a.cum_fees, 4)}`],
+    ["정지선까지", "$" + fmt(left, 2), `정지선 ${usd(a.stop)}`],
+    MODE === "paper" ? ["페이퍼 경과", `${day ?? "-"}<span class="sub"> / ${tr.days}일</span>`, `${t2(tr.start, "md")} ~ ${t2(tr.end, "md")} UTC`]
+                     : ["모드", "LIVE", "실주문"],
+  ];
+  $("kpis").innerHTML = kp.map(([l, v, sub]) => `<div class="kpi"><div class="l">${l}</div><div class="v num">${v}</div><div class="s num">${sub}</div></div>`).join("");
+  renderCards(s);
+  renderChart();
+  renderTables();
+}
+
+function renderCards(s) {
+  const now = (s.ex_now || 0) + (Date.now() / 1000 - fetchedAt);
+  const html = Object.entries(s.symbols || {}).map(([sym, v]) => {
+    const p = v.position;
+    let pos = `<div class="pos flat">포지션 없음</div>`;
+    if (p) {
+      const rem = Math.max(0, (p.deadline_epoch || 0) - now);
+      pos = `<div class="pos num">숏 <b>${p.qty}</b> @ ${px(p.entry_px ?? p.assumed_in)} <span class="${cls(p.upnl_bp)}">${sgn(p.upnl_bp)}bp · ${usd(p.upnl_usd, 4)}</span><br>`
+        + `<span class="sub">남은 보유 ${Math.floor(rem / 60)}분 ${String(Math.floor(rem % 60)).padStart(2, "0")}초 · 익절 ${px(p.tp_px)} · 손절 ${px(p.sl_px)}${p.status !== "open" ? " · " + esc(p.status) : ""}${p.source === "recovered" ? " · 재시작 복구" : ""}</span></div>`;
+    }
+    const past = v.past_bp, r = v.ofi_ratio;
+    const pastPct = past == null ? 0 : Math.max(0, Math.min(1, past / v.move_bp)) * 100;
+    const ofiPct = r == null ? 0 : Math.max(0, Math.min(1, -r / -v.ofi_th)) * 100;
+    const pastHit = past != null && past >= v.move_bp, ofiHit = r != null && r < v.ofi_th;
+    return `<div class="card">
+      <div class="top"><span class="sym">${SHORT(sym)}</span><span class="sub num">${px(v.bid)} / ${px(v.ask)}</span><span class="mid num">${px(v.mid)}</span></div>
+      ${pos}
+      <div class="meter"><div class="row"><span>past 5분</span><span class="num"><b>${sgn(past)}bp</b> / +${v.move_bp}bp</span></div>
+        <div class="track"><i class="${pastHit ? "hit" : ""}" style="width:${pastPct}%"></i></div></div>
+      <div class="meter"><div class="row"><span>OFI 비율 (1분 OFI ÷ 분당 거래량)</span><span class="num"><b>${r == null ? "-" : sgn(r, 2)}</b> / ${v.ofi_th}</span></div>
+        <div class="track"><i class="${ofiHit ? "hit" : ""}" style="width:${ofiPct}%"></i></div></div>
+      <div class="foot num"><span>오늘 진입 ${v.entries_today}/10</span><span>${v.warm === false ? "워밍업 중" : ""}</span>
+        <span class="${v.gate ? "gate" : ""}">${v.gate ? "진입 대기: " + esc(v.gate) : "진입 가능"}</span></div>
+    </div>`;
+  }).join("");
+  $("cards").innerHTML = html;
+}
+
+function renderChart() {
+  const c = $("chart"), dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth, h = c.clientHeight;
+  c.width = w * dpr; c.height = h * dpr;
+  const g = c.getContext("2d"); g.scale(dpr, dpr); g.clearRect(0, 0, w, h);
+  const css = getComputedStyle(document.documentElement);
+  const col = n => css.getPropertyValue(n).trim();
+  const tr = [...(data.trades || [])].sort((a, b) => (a.exit_ts || 0) - (b.exit_ts || 0));
+  if (!tr.length) { g.fillStyle = col("--muted"); g.font = "13px sans-serif"; g.fillText("아직 청산된 거래가 없습니다.", 8, 24); return; }
+  let n = 0, gr = 0; const pts = [[tr[0].entry_ts || tr[0].t_sig, 0, 0]];
+  tr.forEach(t => { n += t.net_usd || 0; gr += t.gross_usd || 0; pts.push([t.exit_ts || t.t_sig, n, gr]); });
+  const xs = pts.map(p => p[0]), ys = pts.flatMap(p => [p[1], p[2]]).concat([0]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs) || x0 + 1, y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const pad = {l: 44, r: 8, t: 8, b: 18}, yr = (y1 - y0) || 1;
+  const X = x => pad.l + (w - pad.l - pad.r) * (x1 === x0 ? 1 : (x - x0) / (x1 - x0));
+  const Y = y => pad.t + (h - pad.t - pad.b) * (1 - (y - y0) / yr);
+  g.strokeStyle = col("--line"); g.lineWidth = 1; g.beginPath(); g.moveTo(pad.l, Y(0)); g.lineTo(w - pad.r, Y(0)); g.stroke();
+  g.fillStyle = col("--muted"); g.font = "11px sans-serif"; g.textAlign = "right";
+  [y1, 0, y0].forEach(v => g.fillText((v < 0 ? "−$" : "$") + Math.abs(v).toFixed(3), pad.l - 4, Y(v) + 4));
+  g.textAlign = "left"; g.fillText(t2(x0, "md"), pad.l, h - 4); g.textAlign = "right"; g.fillText(t2(x1, "md"), w - pad.r, h - 4);
+  const line = (i, color, width) => { g.strokeStyle = color; g.lineWidth = width; g.beginPath();
+    pts.forEach((p, k) => { const xx = X(p[0]), yy = Y(p[i]); k ? g.lineTo(xx, yy) : g.moveTo(xx, yy); }); g.stroke(); };
+  line(2, col("--muted"), 1.2); line(1, col("--accent"), 2);
+}
+
+function table(head, rows, empty) {
+  if (!rows.length) return `<div class="empty">${empty}</div>`;
+  return `<table class="num"><thead><tr>${head.map(h => `<th class="${h[1] || ""}">${h[0]}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>`;
+}
+
+function renderTables() {
+  const d = [...(data.daily || [])].reverse();
+  $("daily").innerHTML = table([["날짜", "l"], ["건"], ["승"], ["수수료 전"], ["수수료"], ["수수료 후"]],
+    d.map(r => `<tr><td>${r.day}</td><td>${r.n}</td><td>${r.win}</td><td class="${cls(r.gross)}">${usd(r.gross, 4)}</td><td>$${fmt(r.fees, 4)}</td><td class="${cls(r.net)}">${usd(r.net, 4)}</td></tr>`),
+    "아직 거래가 없습니다.");
+  const t = [...(data.trades || [])].reverse();
+  $("trades").innerHTML = table([["진입(UTC)", "l"], ["청산"], ["종목", "l"], ["진입가"], ["청산가"], ["사유", "l"], ["bp"], ["$ 순"], ["수수료"], ["슬리피지 진입/청산"]],
+    t.map(r => `<tr><td>${t2(r.entry_ts || r.t_sig)}</td><td>${t2(r.exit_ts, "hms")}</td><td class="l">${SHORT(r.symbol)}</td><td>${px(r.entry_px)}</td><td>${px(r.exit_px)}</td>`
+      + `<td class="l">${esc(r.reason)}</td><td class="${cls(r.pnl_bp)}">${sgn(r.pnl_bp)}</td><td class="${cls(r.net_usd)}">${usd(r.net_usd, 4)}</td>`
+      + `<td>$${fmt(r.fees_usd, 4)}</td><td>${sgn(r.slip_in_bp, 2)} / ${sgn(r.slip_out_bp, 2)}bp</td></tr>`),
+    "아직 거래가 없습니다.");
+  const rc = [...(data.reconcile || [])].reverse();
+  $("recon").innerHTML = table([["날짜", "l"], ["재생"], ["실행"], ["일치"], ["일치율"], ["미커버"], ["차이 원인", "l"]],
+    rc.map(r => `<tr><td>${r.ok ? "✅" : "⚠️"} ${r.day}</td><td>${r.n_replay}</td><td>${r.n_live}</td><td>${r.n_match}</td>`
+      + `<td>${r.rate == null ? "-" : Math.round(r.rate * 100) + "%"}</td><td>${r.n_uncovered}</td>`
+      + `<td class="l">${r.issues.map(i => esc(`${SHORT(i.symbol)} ${i.time} ${i.result}: ${i.why.join("; ")}`)).join("<br>") || "-"}</td></tr>`),
+    "아직 대조한 날이 없습니다. UTC 하루가 끝나고 20분 뒤에 전날을 대조합니다.");
+  const sg = [...(data.signals || [])].reverse().slice(0, 40);
+  $("signals").innerHTML = table([["신호(UTC)", "l"], ["종목", "l"], ["상태", "l"], ["past"], ["OFI비율"], ["가정 진입"], ["가정 청산"], ["엔진 bp"]],
+    sg.map(r => `<tr><td>${t2(r.t_sig)}</td><td class="l">${SHORT(r.symbol)}</td><td class="l">${r.status === "traded" ? "진입" : "건너뜀: " + esc(r.skip_reason)}</td>`
+      + `<td>${sgn(r.past_bp)}</td><td>${sgn(r.ofi_ratio, 2)}</td><td>${px(r.p_in)}</td><td>${px(r.p_out)}</td><td class="${cls(r.engine_bp)}">${sgn(r.engine_bp)}</td></tr>`),
+    "아직 신호가 없습니다.");
+}
+
+load();
+setInterval(load, 10000);
+setInterval(() => { if (data && data.state && !data.state.missing) renderCards(data.state); }, 1000);
+window.addEventListener("resize", () => data && renderChart());
+</script>
+</body>
+</html>

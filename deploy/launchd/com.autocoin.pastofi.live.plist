@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  pastofi 코인판 로직1 실주문. ⚠️ 사용자가 페이퍼 7일 결과를 확인하고 따로 지시하기 전에는 설치하지 마라 (2026-10-26 결정).
+
+  설치: cp deploy/launchd/com.autocoin.pastofi.live.plist ~/Library/LaunchAgents/
+        launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.autocoin.pastofi.live.plist
+  중지: launchctl bootout gui/$(id -u)/com.autocoin.pastofi.live
+  상태: launchctl print gui/$(id -u)/com.autocoin.pastofi.live | grep -E 'state|pid|last exit'
+  재시작은 예외 종료(0이 아닌 종료 코드)일 때만 한다 — 시작 거부(장부 불일치 등)는 0으로 끝나 다시 뜨지 않는다.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.autocoin.pastofi.live</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/woojin/Desktop/autocoin/.venv/bin/python</string>
+        <string>-m</string>
+        <string>src.strategies.pastofi_crypto.runner</string>
+        <string>--mode</string>
+        <string>live</string>
+        <string>--confirm-live</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/woojin/Desktop/autocoin</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>OBSIDIAN_AUTOJI_PATH</key>
+        <string>/Users/woojin/Library/Mobile Documents/iCloud~md~obsidian/Documents/autoji</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/opt/postgresql@18/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>ProcessType</key>
+    <string>Standard</string>
+    <key>StandardOutPath</key>
+    <string>/Users/woojin/Desktop/autocoin/logs/launchd.pastofi.live.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/woojin/Desktop/autocoin/logs/launchd.pastofi.live.err.log</string>
+</dict>
+</plist>
