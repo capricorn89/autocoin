@@ -117,6 +117,26 @@ def payload(mode: str, root: Path = STATE_ROOT) -> dict:
             "server_time": time.time()}
 
 
+_charts: dict = {}           # (mode, trade_id) → 다 찬(청산 15분 뒤까지) 거래 차트. 값이 더 바뀌지 않는다
+
+
+def trade_chart(mode: str, trade_id: str, root: Path = STATE_ROOT) -> dict:
+    """거래 상세 차트 (chart.trade_chart). 거래는 그 모드 거래 목록에 있는 것만 — 아무 구간이나 읽게 두지 않는다."""
+    from .chart import trade_chart as build
+    key = (mode, trade_id)
+    if key in _charts:
+        return _charts[key]
+    t = next((r for r in trades(mode, root) if r["trade_id"] == trade_id), None)
+    if t is None:
+        return {"error": f"거래 {trade_id} 가 {mode} 기록에 없습니다."}
+    out = build(t)
+    if out["final"]:
+        if len(_charts) > 200:
+            _charts.clear()
+        _charts[key] = out
+    return out
+
+
 class Handler(BaseHTTPRequestHandler):
     root = STATE_ROOT
 
@@ -133,6 +153,13 @@ class Handler(BaseHTTPRequestHandler):
                 body = json.dumps(payload(mode, self.root), ensure_ascii=False, default=str).encode()
             except Exception as e:
                 log.exception("api 오류")
+                body = json.dumps({"error": f"{type(e).__name__}: {e}"}, ensure_ascii=False).encode()
+            return self._send(200, body, "application/json; charset=utf-8")
+        if u.path == "/api/trade_chart":
+            try:
+                body = json.dumps(trade_chart(mode, q.get("id", [""])[0], self.root), ensure_ascii=False).encode()
+            except Exception as e:
+                log.exception("거래 차트 오류")
                 body = json.dumps({"error": f"{type(e).__name__}: {e}"}, ensure_ascii=False).encode()
             return self._send(200, body, "application/json; charset=utf-8")
         self._send(404, b"not found", "text/plain")

@@ -72,6 +72,36 @@ th:first-child, td:first-child, td.l, th.l { text-align: left; }
 tr:last-child td { border-bottom: none; }
 .empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
 .legend { display: flex; gap: 12px; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+tbody.click tr { cursor: pointer; }
+tbody.click tr:hover { background: var(--chip); }
+tbody.click tr[aria-selected="true"] { background: color-mix(in srgb, var(--accent) 14%, var(--card)); }
+#detail { margin-top: 8px; }
+#detail[hidden] { display: none; }
+.dhead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.dhead b { font-size: 16px; }
+.dhead button { margin-left: auto; font: inherit; font-size: 12px; color: var(--muted); background: var(--chip); border: 0; border-radius: 6px; padding: 3px 8px; cursor: pointer; }
+.facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 6px 14px; margin: 10px 0; font-size: 12px; color: var(--muted); }
+.facts b { display: block; font-size: 14px; color: var(--ink); font-weight: 600; }
+.ctitle { font-size: 12px; color: var(--muted); margin: 12px 0 2px; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.ctitle b { color: var(--ink); font-weight: 600; }
+.uchart { position: relative; width: 100%; min-width: 0; overflow: hidden; }
+.tip { position: absolute; pointer-events: none; background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 4px 7px;
+  font-size: 12px; line-height: 1.45; box-shadow: 0 2px 8px rgba(0,0,0,.12); white-space: nowrap; z-index: 3; }
+/* uPlot 필수 스타일 */
+.uplot, .uplot *, .uplot *::before, .uplot *::after { box-sizing: border-box; }
+.uplot { font-family: inherit; line-height: 1.5; width: min-content; }
+.u-wrap { position: relative; user-select: none; }
+.u-over, .u-under { position: absolute; }
+.u-under { overflow: hidden; }
+.uplot canvas { display: block; position: relative; width: 100%; height: 100%; }
+.u-axis { position: absolute; }
+.u-legend { display: none; }
+.u-select { background: rgba(127,127,127,.12); position: absolute; pointer-events: none; }
+.u-cursor-x, .u-cursor-y { position: absolute; left: 0; top: 0; pointer-events: none; will-change: transform; }
+.u-cursor-x { height: 100%; border-right: 1px dashed var(--muted); }
+.u-cursor-y { width: 100%; border-bottom: 0; }
+.u-cursor-pt { position: absolute; top: 0; left: 0; border-radius: 50%; border: 2px solid var(--card); pointer-events: none; background-clip: padding-box !important; }
+.u-off { display: none !important; }
 .legend span::before { content: ""; display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 5px;
   vertical-align: middle; background: var(--c); }
 </style>
@@ -98,12 +128,24 @@ tr:last-child td { border-bottom: none; }
   <div class="panel scroll" id="daily"></div>
   <h2>거래 내역</h2>
   <div class="panel scroll" id="trades"></div>
+  <section class="panel" id="detail" hidden>
+    <div class="dhead"><b id="d-name"></b><span class="sub num" id="d-sub"></span><button type="button" id="d-close">닫기</button></div>
+    <div class="facts num" id="d-facts"></div>
+    <div class="ctitle"><span><b>가격</b> mid (bid·ask 흐림)</span><span>세로선: 신호 · 청산 · 음영: 보유 · 점선: 진입가 · 익절 · 손절</span></div>
+    <div class="uchart" id="d-px"></div>
+    <div class="ctitle"><span><b>직전 5분 수익률</b> (bp)</span><span class="num" id="d-pastk"></span></div>
+    <div class="uchart" id="d-past"></div>
+    <div class="ctitle"><span><b>1분 OFI 비율</b> (1분 OFI ÷ 분당 거래량)</span><span class="num" id="d-ofik"></span></div>
+    <div class="uchart" id="d-ofi"></div>
+    <p class="sub" id="d-note"></p>
+  </section>
   <h2>일치 대조 (백테스트 재생 vs 실행)</h2>
   <div class="panel scroll" id="recon"></div>
   <h2>최근 신호 (건너뛴 것 포함)</h2>
   <div class="panel scroll" id="signals"></div>
   <p class="sub" style="margin-top:16px">10초마다 새로 고칩니다. 이 페이지는 tailnet 안에서만 열립니다.</p>
 </main>
+<script src="https://cdn.jsdelivr.net/npm/uplot@1.6.30/dist/uPlot.iife.min.js"></script>
 <script>
 const qs = new URLSearchParams(location.search);
 const MODE = qs.get("mode") || "paper";
@@ -224,9 +266,9 @@ function renderChart() {
   line(2, col("--muted"), 1.2); line(1, col("--accent"), 2);
 }
 
-function table(head, rows, empty) {
+function table(head, rows, empty, tbody = "") {
   if (!rows.length) return `<div class="empty">${empty}</div>`;
-  return `<table class="num"><thead><tr>${head.map(h => `<th class="${h[1] || ""}">${h[0]}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>`;
+  return `<table class="num"><thead><tr>${head.map(h => `<th class="${h[1] || ""}">${h[0]}</th>`).join("")}</tr></thead><tbody class="${tbody}">${rows.join("")}</tbody></table>`;
 }
 
 function renderTables() {
@@ -236,10 +278,10 @@ function renderTables() {
     "아직 거래가 없습니다.");
   const t = [...(data.trades || [])].reverse();
   $("trades").innerHTML = table([["진입(UTC)", "l"], ["청산"], ["종목", "l"], ["진입가"], ["청산가"], ["사유", "l"], ["bp"], ["$ 순"], ["수수료"], ["슬리피지 진입/청산"]],
-    t.map(r => `<tr><td>${t2(r.entry_ts || r.t_sig)}</td><td>${t2(r.exit_ts, "hms")}</td><td class="l">${SHORT(r.symbol)}</td><td>${px(r.entry_px)}</td><td>${px(r.exit_px)}</td>`
+    t.map(r => `<tr data-id="${esc(r.trade_id)}" aria-selected="${r.trade_id === SEL}"><td>${t2(r.entry_ts || r.t_sig)}</td><td>${t2(r.exit_ts, "hms")}</td><td class="l">${SHORT(r.symbol)}</td><td>${px(r.entry_px)}</td><td>${px(r.exit_px)}</td>`
       + `<td class="l">${esc(r.reason)}</td><td class="${cls(r.pnl_bp)}">${sgn(r.pnl_bp)}</td><td class="${cls(r.net_usd)}">${usd(r.net_usd, 4)}</td>`
       + `<td>$${fmt(r.fees_usd, 4)}</td><td>${sgn(r.slip_in_bp, 2)} / ${sgn(r.slip_out_bp, 2)}bp</td></tr>`),
-    "아직 거래가 없습니다.");
+    "아직 거래가 없습니다.", "click");
   const rc = [...(data.reconcile || [])].reverse();
   $("recon").innerHTML = table([["날짜", "l"], ["재생"], ["실행"], ["일치"], ["일치율"], ["미커버"], ["차이 원인", "l"]],
     rc.map(r => `<tr><td>${r.ok ? "✅" : "⚠️"} ${r.day}</td><td>${r.n_replay}</td><td>${r.n_live}</td><td>${r.n_match}</td>`
@@ -252,6 +294,98 @@ function renderTables() {
       + `<td>${sgn(r.past_bp)}</td><td>${sgn(r.ofi_ratio, 2)}</td><td>${px(r.p_in)}</td><td>${px(r.p_out)}</td><td class="${cls(r.engine_bp)}">${sgn(r.engine_bp)}</td></tr>`),
     "아직 신호가 없습니다.");
 }
+
+// ── 거래 상세: 누른 거래의 신호 15분 전 ~ 청산 15분 뒤, 1초마다 (서버가 DB 구간을 엔진으로 다시 재생) ──
+let SEL = null, plots = [];
+const col = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+$("trades").addEventListener("click", e => { const r = e.target.closest("tr[data-id]"); if (r) showTrade(r.dataset.id); });
+$("d-close").addEventListener("click", () => { SEL = null; killPlots(); $("detail").hidden = true; markSel(); });
+const markSel = () => document.querySelectorAll("#trades tr[data-id]").forEach(r => r.setAttribute("aria-selected", String(r.dataset.id === SEL)));
+const killPlots = () => { plots.forEach(p => p.destroy()); plots = []; };
+
+async function showTrade(id) {
+  SEL = id; markSel();
+  const t = (data.trades || []).find(r => r.trade_id === id);
+  if (!t) return;
+  $("detail").hidden = false;
+  $("d-name").textContent = `${SHORT(t.symbol)} 숏 · ${t.reason || "-"}`;
+  $("d-sub").innerHTML = `${t2(t.t_sig)} UTC · <span class="${cls(t.pnl_bp)}">${sgn(t.pnl_bp)}bp</span> · <span class="${cls(t.net_usd)}">${usd(t.net_usd, 4)}</span>`;
+  $("d-facts").innerHTML = [
+    ["신호 → 청산", `${t2(t.t_sig, "hms")} → ${t2(t.exit_ts, "hms")}`], ["보유", t.exit_ts ? `${Math.round(t.exit_ts - (t.entry_ts || t.t_sig))}초` : "-"],
+    ["직전 5분 수익률", `${sgn(t.past_bp)}bp`], ["OFI 비율", sgn(t.ofi_ratio, 3)],
+    ["진입가 (가정/체결)", `${px(t.assumed_in)} / ${px(t.entry_px)}`], ["청산가 (가정/체결)", `${px(t.assumed_out)} / ${px(t.exit_px)}`],
+    ["슬리피지 진입/청산", `${sgn(t.slip_in_bp, 2)} / ${sgn(t.slip_out_bp, 2)}bp`], ["수량 · 수수료", `${t.qty} · $${fmt(t.fees_usd, 4)}`],
+  ].map(([k, v]) => `<div>${k}<b>${v}</b></div>`).join("");
+  $("d-note").textContent = "불러오는 중…"; $("d-pastk").textContent = $("d-ofik").textContent = "";
+  killPlots();
+  let c;
+  try { c = await (await fetch(`/api/trade_chart?mode=${MODE}&id=${encodeURIComponent(id)}`, {cache: "no-store"})).json(); }
+  catch (e) { c = {error: String(e)}; }
+  if (SEL !== id) return;
+  if (c.error) { $("d-note").textContent = "차트를 만들지 못했습니다: " + c.error; return; }
+  drawTrade(t, c);
+  $("detail").scrollIntoView({behavior: "smooth", block: "nearest"});
+}
+
+function drawTrade(t, c) {
+  const P = c.params, sig = t.t_sig, out = t.exit_ts || sig + P.hold, pin = t.assumed_in;
+  $("d-pastk").textContent = `점선 +${P.move_bp}bp · 신호 때 ${sgn(c.check.chart.past_bp)}bp (≥ +${P.move_bp}이면 조건 충족)`;
+  $("d-ofik").textContent = `점선 −${P.ofi_th} · 신호 때 ${sgn(c.check.chart.ofi_ratio, 3)} (< −${P.ofi_th}이면 조건 충족)`;
+  const ax = {stroke: col("--muted"), grid: {stroke: col("--line"), width: 1}, ticks: {stroke: col("--line"), width: 1, size: 4}, font: "11px -apple-system, sans-serif"};
+  const xax = {...ax, values: [[3600, "{HH}:{mm}", null, null, null, null, null, null, 0], [60, "{HH}:{mm}", null, null, null, null, null, null, 0], [1, "{HH}:{mm}:{ss}", null, null, null, null, null, null, 0]]};
+  const vline = (u, x, color) => { const g = u.ctx, p = u.valToPos(x, "x", true); g.strokeStyle = color; g.beginPath(); g.moveTo(p, u.bbox.top); g.lineTo(p, u.bbox.top + u.bbox.height); g.stroke(); };
+  const hline = (u, y, color, dash) => { const g = u.ctx, p = u.valToPos(y, "y", true); g.strokeStyle = color; g.setLineDash(dash.map(z => z * devicePixelRatio));
+    g.beginPath(); g.moveTo(u.bbox.left, p); g.lineTo(u.bbox.left + u.bbox.width, p); g.stroke(); g.setLineDash([]); };
+  const band = u => { const g = u.ctx, a = u.valToPos(sig, "x", true), b = u.valToPos(out, "x", true);
+    g.save(); g.fillStyle = col("--chip"); g.fillRect(a, u.bbox.top, b - a, u.bbox.height); g.restore(); };
+  const marks = u => { const g = u.ctx; g.save(); g.lineWidth = 1.5 * devicePixelRatio; vline(u, sig, col("--accent")); vline(u, out, (t.pnl_bp || 0) >= 0 ? col("--up") : col("--down")); g.restore(); };
+  const mk = (id, h, series, data, yopt, extra, tipFmt) => {
+    const el = $(id);
+    const tip = el.querySelector(".tip") || Object.assign(el.appendChild(document.createElement("div")), {className: "tip num", hidden: true});
+    const u = new uPlot({
+      width: el.clientWidth, height: h, legend: {show: false},
+      tzDate: ts => uPlot.tzDate(new Date(ts * 1e3), "Etc/UTC"),
+      cursor: {y: false, points: {size: 6}, sync: {key: "trade"}},
+      scales: {x: {time: true, min: c.lo, max: c.hi}, y: yopt},
+      axes: [xax, {...ax, size: 62}],
+      series: [{}, ...series],
+      hooks: {
+        drawClear: [band],
+        draw: [u => { u.ctx.save(); u.ctx.lineWidth = devicePixelRatio; extra(u); u.ctx.restore(); marks(u); }],
+        setCursor: [u => { const k = u.cursor.idx; if (k == null || u.cursor.left < 0) { tip.hidden = true; return; }
+          tip.innerHTML = `${t2(u.data[0][k], "hms")}<br>${tipFmt(u, k)}`; tip.hidden = false;
+          const L = u.cursor.left + u.bbox.left / devicePixelRatio;
+          tip.style.left = (L + 12 + tip.offsetWidth > el.clientWidth ? L - 12 - tip.offsetWidth : L + 12) + "px"; tip.style.top = "4px"; }],
+      },
+    }, [c.t, ...data], el);
+    plots.push(u);
+  };
+  // 가격: mid + bid·ask(흐림), 진입 가정가·익절·손절 점선
+  const tp = pin * (1 - P.tp_bp / 1e4), sl = pin * (1 + P.sl_bp / 1e4);
+  const vals = c.mid.filter(v => v != null);
+  const ylo = Math.min(...vals), yhi = Math.max(...vals);
+  mk("d-px", 220, [{stroke: col("--muted"), width: 1, alpha: .35}, {stroke: col("--muted"), width: 1, alpha: .35}, {stroke: col("--ink"), width: 1.5}],
+     [c.bid, c.ask, c.mid],
+     {range: () => { const a = Math.min(ylo, pin), b = Math.max(yhi, pin), m = (b - a) * .08 || pin * 1e-4; return [a - m, b + m]; }},
+     u => { hline(u, pin, col("--accent"), [4, 3]); for (const [y, cc] of [[tp, col("--up")], [sl, col("--down")]]) if (y >= u.scales.y.min && y <= u.scales.y.max) hline(u, y, cc, [2, 3]); },
+     (u, k) => `mid ${px(u.data[3][k])}<br><span class="sub">${px(u.data[1][k])} / ${px(u.data[2][k])}</span>${pin ? `<br>진입가 대비 ${sgn(Math.log(u.data[3][k] / pin) * 1e4)}bp` : ""}`);
+  // 직전 5분 수익률·OFI 비율: 0선 + 문턱 점선. 극단값 하나에 문턱이 납작해지지 않게 |값| 98% 분위수로 범위를 잡는다
+  const rng = (Y, th) => () => { const a = Y.filter(v => v != null).map(Math.abs).sort((x, y) => x - y);
+    const q = a.length ? a[Math.floor(a.length * .98)] : 0, m = Math.max(q, th * 1.3); return [-m * 1.1, m * 1.1]; };
+  mk("d-past", 150, [{stroke: col("--accent"), width: 1.5}], [c.past_bp], {range: rng(c.past_bp, P.move_bp)},
+     u => { hline(u, 0, col("--line"), []); hline(u, P.move_bp, col("--muted"), [4, 4]); },
+     (u, k) => `${sgn(u.data[1][k])}bp`);
+  mk("d-ofi", 150, [{stroke: col("--warn"), width: 1.5}], [c.ofi_ratio], {range: rng(c.ofi_ratio, P.ofi_th)},
+     u => { hline(u, 0, col("--line"), []); hline(u, -P.ofi_th, col("--muted"), [4, 4]); },
+     (u, k) => sgn(u.data[1][k], 3));
+  $("d-note").textContent = `${t2(c.lo, "md hms")} ~ ${t2(c.hi, "hms")} UTC, 1초 간격. 수집 DB(호가 ${c.n_quotes.toLocaleString()}건 · 체결 ${c.n_trades.toLocaleString()}건)를 실행 엔진 그대로 다시 돌려 그 초에 엔진이 봤을 값이다 (T-1초까지 데이터).`
+    + (c.check.ok ? " 신호 초 값이 거래 기록과 같다." : ` ⚠️ 신호 초 값이 거래 기록과 다르다 (차트 ${sgn(c.check.chart.past_bp)}bp·${sgn(c.check.chart.ofi_ratio, 3)} / 기록 ${sgn(c.check.trade.past_bp)}bp·${sgn(c.check.trade.ofi_ratio, 3)}) — 그 구간 수집 공백일 수 있다.`)
+    + (c.final ? "" : " 청산 15분 뒤까지 아직 안 됐다 — 다시 누르면 늘어난다.")
+    + " 가격은 1호가 mid라 체결가와 다를 수 있다.";
+}
+let rsz;
+new ResizeObserver(() => { clearTimeout(rsz); rsz = setTimeout(() => plots.forEach(p => { const w = p.root.parentElement.clientWidth; if (Math.abs(w - p.width) > 1) p.setSize({width: w, height: p.height}); }), 80); }).observe(document.querySelector("main"));
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (SEL) showTrade(SEL); });
 
 load();
 setInterval(load, 10000);

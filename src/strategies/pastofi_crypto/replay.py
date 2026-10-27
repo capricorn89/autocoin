@@ -31,9 +31,13 @@ def _dsn() -> str:
 
 def load_day(symbol: str, d: date, dsn: str | None = None) -> tuple[list, list]:
     """그날 [00:00, 24:00) UTC 호가(1호가)·체결. 시각은 epoch ms."""
-    import psycopg
     lo = datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
-    hi = lo + timedelta(days=1)
+    return load_window(symbol, lo, lo + timedelta(days=1), dsn)
+
+
+def load_window(symbol: str, lo: datetime, hi: datetime, dsn: str | None = None) -> tuple[list, list]:
+    """[lo, hi) 호가(1호가)·체결. 시각은 epoch ms."""
+    import psycopg
     with psycopg.connect(dsn or _dsn()) as conn:
         q = conn.execute(
             "SELECT (extract(epoch from exchange_ts) * 1000)::bigint, bid_px_1, bid_qty_1, ask_px_1, ask_qty_1 "

@@ -172,3 +172,11 @@ def test_web_payload_reads_state_files(tmp_path, monkeypatch):
     body = json.dumps(p)
     for secret in ("TELEGRAM", "BINANCE_API", "token"):
         assert secret not in body
+
+
+def test_web_trade_chart_only_known_trades(tmp_path, monkeypatch):
+    # 거래 목록에 없는 id 로는 DB 구간을 읽지 않는다
+    monkeypatch.setattr(web, "trades", lambda mode, root: [{"trade_id": "SOLUSDT-1", "symbol": "SOLUSDT", "t_sig": 1}])
+    import src.strategies.pastofi_crypto.chart as chart
+    monkeypatch.setattr(chart, "trade_chart", lambda t: (_ for _ in ()).throw(AssertionError("읽으면 안 된다")))
+    assert "error" in web.trade_chart("paper", "BTCUSDT-9", tmp_path)
