@@ -48,8 +48,8 @@ def trades(mode: str, root: Path = STATE_ROOT) -> list[dict]:
         import psycopg
         from ...storage.db import get_dsn
         with psycopg.connect(get_dsn(None), connect_timeout=3) as conn:
-            cur = conn.execute(f"SELECT {', '.join(TRADE_FIELDS)} FROM exec.pastofi_trades WHERE mode = %s "
-                               "ORDER BY t_sig", (mode,))
+            cols = ", ".join("detail->>'source'" if k == "source" else k for k in TRADE_FIELDS)   # source 는 detail 안에 있다 (store.py)
+            cur = conn.execute(f"SELECT {cols} FROM exec.pastofi_trades WHERE mode = %s ORDER BY t_sig", (mode,))
             rows = [dict(zip(TRADE_FIELDS, r)) for r in cur.fetchall()]
         for r in rows:
             for k in ("t_sig", "entry_ts", "exit_ts"):
