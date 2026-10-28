@@ -14,22 +14,44 @@ from src.strategies.pastofi_crypto.brokers import PastofiLiveBroker
 from src.strategies.pastofi_crypto.feed import DAY, Signal
 from src.strategies.pastofi_crypto.notify import entry_text, exit_text
 from src.strategies.pastofi_crypto.runner import App, Health
-from src.strategies.pastofi_crypto.spec import SPEC_PATH, Spec
+from src.strategies.pastofi_crypto.spec import SPEC_PATH, SPEC_V1, Spec
 
-# spec_v1.yaml 동결 해시. 깨지면 v1 을 고친 것이다 → spec_v2.yaml 로 버전을 올릴 것
-FROZEN_SHA256 = "16679636b878"
+# 동결 해시. 깨지면 그 버전을 고친 것이다 → 다음 버전 파일로 올릴 것
+FROZEN_SHA256 = "16679636b878"          # spec_v1.yaml
+FROZEN_V2_SHA256 = "d7dc6a0239b6"       # spec_v2.yaml
 PKG = Path(eng_mod.__file__).parent
 KRX = Path.home() / "Desktop" / "krx-hft"
 
 
 def test_spec_v1_is_frozen():
-    s = Spec.load()
+    s = Spec.load(SPEC_V1)
     assert s.sha256.startswith(FROZEN_SHA256)
     assert s.version == "pastofi-crypto-1.0"
     assert s.symbols == ["BTCUSDT", "ETHUSDT", "SOLUSDT", "EWYUSDT"]
     assert s.raw["risk"]["stop_cumulative_usd"] == -5.0 and s.raw["risk"]["max_entries_per_symbol_day"] == 10
     assert s.raw["paper"]["start_balance_usd"] == 200.0 and s.raw["fees_bps"]["taker"] == 4.0
     assert s.raw["live"]["emergency_stop_pct"] == 1.5 and s.raw["input"]["qty_scale"] == 1000
+
+
+def _flat(d, prefix=""):
+    out = {}
+    for k, v in d.items():
+        key = f"{prefix}{k}"
+        out.update(_flat(v, key + ".") if isinstance(v, dict) else {key: v})
+    return out
+
+
+def test_spec_v2_differs_from_v1_only_in_sizing():
+    v1, v2 = Spec.load(SPEC_V1), Spec.load()
+    assert SPEC_PATH.name == "spec_v2.yaml" and v2.sha256.startswith(FROZEN_V2_SHA256)
+    assert v2.version == "pastofi-crypto-1.1" and v2.sizing_rule == "equal_notional" and v1.sizing_rule == "min_notional"
+    a, b = _flat(v1.raw), _flat(v2.raw)
+    diff = {k for k in a.keys() | b.keys() if a.get(k) != b.get(k)}
+    assert diff == {"version", "frozen_at", "engine.params.version", "sizing.rule",
+                    "sizing.max_qty.ETHUSDT", "sizing.max_qty.SOLUSDT", "sizing.max_qty.EWYUSDT",
+                    "risk.stop_cumulative_usd", "paper.start_balance_usd"}
+    assert b["risk.stop_cumulative_usd"] == -15.0 and b["paper.start_balance_usd"] == 400.0
+    assert v1.params() == __import__("dataclasses").replace(v2.params(), version=v1.version)   # 엔진 값 동일
 
 
 def test_engine_copy_is_frozen():

@@ -489,9 +489,10 @@ def build(mode: str, confirm_live: bool = False, state_root: Path = STATE_ROOT,
     trader.ex_positions = None
     # 시작 시 수량 (공개 호가 기준) — 상한을 넘으면 실행 거부
     qty = {}
+    bids = {s: float(public.get("/fapi/v1/ticker/bookTicker", {"symbol": s})["bidPrice"]) for s in spec.symbols}
     for s in spec.symbols:
-        bid = float(public.get("/fapi/v1/ticker/bookTicker", {"symbol": s})["bidPrice"])
-        q = sized(spec, s, bid, filters[s])              # SpecError → 시작 거부
+        bid = bids[s]
+        q = sized(spec, s, bids, filters)               # SpecError → 시작 거부
         f = filters[s]
         qty[s] = f"{q:g} (step {f.step:g}, MIN_NOTIONAL ${f.min_notional:g}, 가격 {bid:g} → 명목 ${q * bid:.2f})"
     qty_note = " · ".join(f"{SHORT[s]} {v.split(' ')[0]}" for s, v in qty.items())

@@ -153,7 +153,7 @@ def test_engine_params_are_spec_values(spec):
            (70.0, 200.0, 100.0, 300, 0.5, 300, 60, 600)
     assert (p.session_open, p.session_close, p.entry_start, p.entry_end) == (0, 86400, 0, 86100)
     assert (p.fut_min_rem, p.fut_gap_ticks, p.fut_limit_bp, p.vi_pad) == (0, 10 ** 9, 1e9, 0)
-    assert p.version == "pastofi-crypto-1.0"
+    assert p.version == spec.version
 
 
 # ---------------------------------------------------------------- 실데이터 일치 검증 (필수)

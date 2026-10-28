@@ -156,7 +156,7 @@ class Trader:
             r = st.realized.get(today, {})
             w = self.wallet() if self.mode == "live" else None
             balance = w if w is not None else self.start_balance + st.cum_net
-            return {"balance": balance, "today": r.get("net", 0.0), "cum": st.cum_net, "stop": self.stop_line,
+            return {"balance": balance, "start_balance": self.start_balance, "today": r.get("net", 0.0), "cum": st.cum_net, "stop": self.stop_line,
                     "today_n": r.get("n", 0), "today_win": r.get("win", 0), "today_loss": r.get("loss", 0),
                     "entries": {s: st.entries.get(today, {}).get(s, 0) for s in self.spec.symbols},
                     "max_entries": self.max_entries, "halted": st.halted, "halt_reason": st.halt_reason,
@@ -190,8 +190,12 @@ class Trader:
             self.store.event({"event": "skip", "symbol": sym, "t_sig": ep, "reason": reason})
             log.info("신호 건너뜀 %s %s: %s", sym, utc_day(ep), reason)
             return
+        prices = {s: sig.p_in if s == sym else (self.quote(s) or (None,))[0] for s in self.spec.symbols}
+        if self.spec.sizing_rule == "equal_notional" and not all(prices.values()):
+            self._signal({**rec, "status": "skipped", "skip_reason": "시세 없음 (수량 계산)"})
+            return
         try:
-            qty = sized(self.spec, sym, sig.p_in, self.filters[sym])
+            qty = sized(self.spec, sym, prices, self.filters)
         except SpecError as e:
             self._signal({**rec, "status": "skipped", "skip_reason": "수량 상한"})
             self.alert(f"{sym} 신호를 건너뛰었습니다 — {e}")

@@ -1,6 +1,6 @@
 """스펙 로드 + 엔진 파라미터 + 수량 규칙.
 
-스펙 파일은 동결본이다. 여기서는 읽고 계산만 한다.
+스펙 파일은 동결본이다 (지금 실행은 spec_v2.yaml). 여기서는 읽고 계산만 한다.
 
     python -m src.strategies.pastofi_crypto.spec            # 스펙 요약 + 지금 가격 기준 수량
 """
@@ -17,7 +17,8 @@ import yaml
 from .engine import LOGIC1, SymbolEngine
 from .params import DEFAULT, Params
 
-SPEC_PATH = Path(__file__).with_name("spec_v1.yaml")
+SPEC_V1 = Path(__file__).with_name("spec_v1.yaml")
+SPEC_PATH = Path(__file__).with_name("spec_v2.yaml")     # 지금 실행 스펙
 
 
 class SpecError(RuntimeError):
@@ -66,6 +67,14 @@ class Spec:
     def qty_scale(self) -> float:
         return float(self.raw["input"]["qty_scale"])
 
+    @property
+    def sizing_rule(self) -> str:
+        """min_notional (v1: 종목마다 최소 명목) · equal_notional (v2: 4종목 명목을 가장 큰 최소 명목에 맞춘다)."""
+        rule = self.raw["sizing"].get("rule", "min_notional")
+        if rule not in ("min_notional", "equal_notional"):
+            raise SpecError(f"알 수 없는 sizing.rule: {rule}")
+        return rule
+
 
 # ---------------------------------------------------------------- 수량
 @dataclass(frozen=True)
@@ -103,12 +112,29 @@ def order_qty(price: float, flt: SymbolFilters, mult: float) -> float:
     return q
 
 
-def sized(spec: Spec, symbol: str, price: float, flt: SymbolFilters) -> float:
-    """수량 규칙 + max_qty 상한. 상한을 넘으면 SpecError."""
-    q = order_qty(price, flt, float(spec.raw["sizing"]["min_notional_mult"]))
+def equal_notional_qty(symbol: str, prices: dict[str, float], filters: dict[str, SymbolFilters],
+                       mult: float) -> float:
+    """목표 명목(종목별 최소 수량 명목 중 최대)에 가장 가까운 stepSize 배수. 자기 최소 수량 아래로는 내려가지 않는다."""
+    target = max(order_qty(prices[s], filters[s], mult) * prices[s] for s in prices)
+    flt, px = filters[symbol], prices[symbol]
+    floor_q = order_qty(px, flt, mult)
+    q = round(round(target / px / flt.step) * flt.step, _decimals(flt.step))
+    return max(q, floor_q)
+
+
+def sized(spec: Spec, symbol: str, prices: dict[str, float], filters: dict[str, SymbolFilters]) -> float:
+    """수량 규칙 + max_qty 상한. prices 는 종목별 가격 (equal_notional 은 스펙 종목 전부 필요). 상한을 넘으면 SpecError."""
+    mult = float(spec.raw["sizing"]["min_notional_mult"])
+    if spec.sizing_rule == "equal_notional":
+        missing = [s for s in spec.symbols if not prices.get(s)]
+        if missing:
+            raise SpecError(f"{symbol} 수량 계산에 필요한 가격이 없다: {', '.join(missing)}")
+        q = equal_notional_qty(symbol, {s: prices[s] for s in spec.symbols}, filters, mult)
+    else:
+        q = order_qty(prices[symbol], filters[symbol], mult)
     cap = float(spec.raw["sizing"]["max_qty"][symbol])
     if q > cap + 1e-12:
-        raise SpecError(f"{symbol} 수량 {q} 가 스펙 상한 {cap} 를 넘는다 (가격 {price}) — 실행 거부")
+        raise SpecError(f"{symbol} 수량 {q} 가 스펙 상한 {cap} 를 넘는다 (가격 {prices[symbol]}) — 실행 거부")
     return q
 
 
@@ -118,11 +144,13 @@ def main() -> None:
     print(f"{spec.version}  sha256={spec.sha256[:12]}  종목 {', '.join(spec.symbols)}")
     print("엔진:", spec.params())
     info = requests.get("https://fapi.binance.com/fapi/v1/exchangeInfo", timeout=15).json()
+    filters = {s: SymbolFilters.from_exchange_info(info, s) for s in spec.symbols}
+    prices = {s: float(requests.get("https://fapi.binance.com/fapi/v1/ticker/bookTicker",
+                                    params={"symbol": s}, timeout=10).json()["bidPrice"]) for s in spec.symbols}
+    print(f"수량 규칙: {spec.sizing_rule}")
     for sym in spec.symbols:
-        flt = SymbolFilters.from_exchange_info(info, sym)
-        px = float(requests.get("https://fapi.binance.com/fapi/v1/ticker/bookTicker",
-                                params={"symbol": sym}, timeout=10).json()["bidPrice"])
-        q = sized(spec, sym, px, flt)
+        flt, px = filters[sym], prices[sym]
+        q = sized(spec, sym, prices, filters)
         print(f"{sym}: step {flt.step:g} · MIN_NOTIONAL ${flt.min_notional:g} · 가격 {px:g} → 수량 {q:g} (명목 ${q * px:.2f})")
 
 

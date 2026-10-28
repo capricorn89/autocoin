@@ -1,7 +1,7 @@
 # pastofi 코인판 로직1 (WOO-104~106, Linear P-WOO-9)
 
 5분 +70bp 급등 뒤 1분 OFI ÷ 분당 거래량 < −0.5 → 숏 시장가, 익절 2% · 손절 1%(ask1 판정) · 최대 5분.
-BTCUSDT · ETHUSDT · SOLUSDT · EWYUSDT (USDT-M 무기한). 스펙 `spec_v1.yaml` (pastofi-crypto-1.0, sha256 동결).
+BTCUSDT · ETHUSDT · SOLUSDT · EWYUSDT (USDT-M 무기한). 스펙 `spec_v2.yaml` (pastofi-crypto-1.1, sha256 동결 — v1 에서 수량만 바꿨다: 4종목 진입 명목을 BTC 0.001 ≈ $81 에 맞춘다).
 
 진행 (사용자 결정 2026-10-26): **페이퍼 7일 → 사용자 확인 → 라이브(별도 지시)**. 페이퍼 시작 2026-10-26 04:21 UTC.
 
@@ -34,7 +34,7 @@ touch data/pastofi/paper/KILL                                                # �
 
 ## 진입 게이트 (하나라도 걸리면 건너뛰고 사유 기록)
 
-정지선(누적 실현 −$5) · 종목당 하루 10건 · 보유 중 · KILL · 판단 지연 > 1초 · 시계 오프셋 > 5초 ·
+정지선(누적 실현 −$15) · 종목당 하루 10건 · 보유 중 · KILL · 판단 지연 > 1초 · 시계 오프셋 > 5초 ·
 depth 재동기화 중 · **피처 창(662초) 안 데이터 공백**(프로세스 시작·재시작 워밍업, WS 끊김, 갭) · depth/체결 지연 > 1초.
 
 ## 알림 (텔레그램, `[pastofi PAPER]` / `[pastofi LIVE]`)

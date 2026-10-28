@@ -200,7 +200,7 @@ function render() {
   const day = tr.start ? Math.min(Math.floor((Date.now() / 1000 - tr.start) / 86400) + 1, 999) : null;
   const left = a.cum - a.stop;
   const kp = [
-    ["잔고", "$" + fmt(a.balance, 2), MODE === "live" ? "거래소 지갑" : "가정 시작 $200"],
+    ["잔고", "$" + fmt(a.balance, 2), MODE === "live" ? "거래소 지갑" : "가정 시작 $" + fmt(a.start_balance, 0)],
     ["오늘 실현 (UTC)", `<span class="${cls(a.today)}">${usd(a.today, 4)}</span>`, `${a.today_n || 0}건 · 승 ${a.today_win || 0} / 패 ${a.today_loss || 0}`],
     ["누적 실현", `<span class="${cls(a.cum)}">${usd(a.cum, 4)}</span>`, `${a.n_trades || 0}건 · 수수료 $${fmt(a.cum_fees, 4)}`],
     ["정지선까지", "$" + fmt(left, 2), `정지선 ${usd(a.stop)}`],

@@ -10,7 +10,7 @@ from src.strategies.pastofi_crypto.brokers import LiveMarketView
 from src.strategies.pastofi_crypto.engine import LOGIC1, Trade
 from src.strategies.pastofi_crypto.feed import DAY, Exit, Signal
 from src.strategies.pastofi_crypto.runner import _risk_guard
-from src.strategies.pastofi_crypto.spec import Spec, SpecError, SymbolFilters, order_qty, sized
+from src.strategies.pastofi_crypto.spec import SPEC_V1, Spec, SpecError, SymbolFilters, order_qty, sized
 from src.strategies.pastofi_crypto.store import Store
 from src.strategies.pastofi_crypto.trader import StartRefused, Trader
 
@@ -23,6 +23,11 @@ FILTERS = {"BTCUSDT": SymbolFilters("BTCUSDT", 0.001, 0.001, 50.0, 0.1),
 
 @pytest.fixture(scope="module")
 def spec():
+    return Spec.load(SPEC_V1)        # 아래 거래 흐름 테스트는 v1 수량(종목별 최소 명목) 기준. v2 수량은 test_equal_notional_*
+
+
+@pytest.fixture(scope="module")
+def spec2():
     return Spec.load()
 
 
@@ -34,7 +39,35 @@ def test_sizing_matches_user_table(spec):
     q = order_qty(30000, FILTERS["BTCUSDT"], 1.1)
     assert q * 30000 >= 55 and (q - 0.001) * 30000 < 55
     with pytest.raises(SpecError):
-        sized(spec, "SOLUSDT", 20.0, FILTERS["SOLUSDT"])           # 0.28 > 상한 0.12
+        sized(spec, "SOLUSDT", {"SOLUSDT": 20.0}, FILTERS)          # 0.28 > 상한 0.12
+
+
+PRICES = {"BTCUSDT": 81133.5, "ETHUSDT": 2355.8, "SOLUSDT": 102.17, "EWYUSDT": 163.76}   # 2026-10-29 bid
+
+
+def test_equal_notional_sizes_all_symbols_to_btc_minimum(spec2):
+    q = {s: sized(spec2, s, PRICES, FILTERS) for s in spec2.symbols}
+    assert q == {"BTCUSDT": 0.001, "ETHUSDT": 0.034, "SOLUSDT": 0.79, "EWYUSDT": 0.5}
+    notional = {s: q[s] * PRICES[s] for s in q}
+    target = notional["BTCUSDT"]
+    for s, n in notional.items():                                      # 가장 가까운 step 배수 → 반 step 안
+        assert abs(n - target) <= FILTERS[s].step * PRICES[s] / 2 + 1e-9, s
+
+
+def test_equal_notional_target_follows_largest_minimum(spec2):
+    # BTC 가 $40,000 이면 0.001 = $40 < $55 → BTC 최소가 0.002($80). 목표도 $80 로 따라간다
+    p = {**PRICES, "BTCUSDT": 40000.0}
+    assert sized(spec2, "BTCUSDT", p, FILTERS) == 0.002
+    assert sized(spec2, "SOLUSDT", p, FILTERS) == 0.78
+    # 어떤 종목도 자기 최소 수량(MIN_NOTIONAL × 1.1) 아래로는 안 내려간다
+    assert sized(spec2, "ETHUSDT", {**PRICES, "BTCUSDT": 20000.0}, FILTERS) * 2355.8 >= 22
+
+
+def test_equal_notional_refuses_missing_price_and_cap(spec2):
+    with pytest.raises(SpecError, match="가격이 없다"):
+        sized(spec2, "SOLUSDT", {**PRICES, "ETHUSDT": None}, FILTERS)
+    with pytest.raises(SpecError, match="상한"):
+        sized(spec2, "SOLUSDT", {**PRICES, "SOLUSDT": 40.0}, FILTERS)  # $81 / 40 = 2.03 > 1.6
 
 
 class Clock:
@@ -191,3 +224,19 @@ def test_client_ids_fit_binance_limit(spec, tmp_path):
     env = Env(spec, tmp_path)
     cid = env.trader._cid("BTCUSDT", DAY0 * DAY + 86399, "x", 12)
     assert cid == "pof-BTC-20261026-86399-x12" and len(cid) <= 36
+
+
+def test_equal_notional_entry_uses_other_symbols_bids(spec2, tmp_path):
+    env = Env(spec2, tmp_path)
+    ms = int(env.t() * 1000)
+    for s, px in PRICES.items():
+        book(env.views[s], px, px + FILTERS[s].tick, ms)
+    env.trader.on_entry(env.signal("SOLUSDT", p_in=PRICES["SOLUSDT"]))
+    pos = env.trader.state.positions["SOLUSDT"]
+    assert pos["status"] == "open" and pos["qty"] == 0.79              # ≈ BTC 0.001 명목 ($81)
+    q = env.trader.quote
+    env.trader.quote = lambda s: None if s == "ETHUSDT" else q(s)     # 호가 없음 (App.quote) → 수량을 못 정하니 건너뛴다
+    env.trader.on_entry(env.signal("EWYUSDT", T=3700, p_in=PRICES["EWYUSDT"]))
+    assert env.trader.state.positions["EWYUSDT"] is None
+    s = [x for x in env.store.signals() if x["symbol"] == "EWYUSDT"][-1]
+    assert s["status"] == "skipped" and s["skip_reason"] == "시세 없음 (수량 계산)"
