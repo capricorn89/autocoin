@@ -14,11 +14,12 @@ from src.strategies.pastofi_crypto.brokers import PastofiLiveBroker
 from src.strategies.pastofi_crypto.feed import DAY, Signal
 from src.strategies.pastofi_crypto.notify import entry_text, exit_text
 from src.strategies.pastofi_crypto.runner import App, Health
-from src.strategies.pastofi_crypto.spec import SPEC_PATH, SPEC_V1, Spec
+from src.strategies.pastofi_crypto.spec import SPEC_PATH, SPEC_V1, SPEC_V2, Spec, SpecError
 
 # 동결 해시. 깨지면 그 버전을 고친 것이다 → 다음 버전 파일로 올릴 것
 FROZEN_SHA256 = "16679636b878"          # spec_v1.yaml
 FROZEN_V2_SHA256 = "d7dc6a0239b6"       # spec_v2.yaml
+FROZEN_V3_SHA256 = "2ec7d595d22f"       # spec_v3.yaml
 PKG = Path(eng_mod.__file__).parent
 KRX = Path.home() / "Desktop" / "krx-hft"
 
@@ -42,8 +43,8 @@ def _flat(d, prefix=""):
 
 
 def test_spec_v2_differs_from_v1_only_in_sizing():
-    v1, v2 = Spec.load(SPEC_V1), Spec.load()
-    assert SPEC_PATH.name == "spec_v2.yaml" and v2.sha256.startswith(FROZEN_V2_SHA256)
+    v1, v2 = Spec.load(SPEC_V1), Spec.load(SPEC_V2)
+    assert v2.sha256.startswith(FROZEN_V2_SHA256)
     assert v2.version == "pastofi-crypto-1.1" and v2.sizing_rule == "equal_notional" and v1.sizing_rule == "min_notional"
     a, b = _flat(v1.raw), _flat(v2.raw)
     diff = {k for k in a.keys() | b.keys() if a.get(k) != b.get(k)}
@@ -52,6 +53,26 @@ def test_spec_v2_differs_from_v1_only_in_sizing():
                     "risk.stop_cumulative_usd", "paper.start_balance_usd"}
     assert b["risk.stop_cumulative_usd"] == -15.0 and b["paper.start_balance_usd"] == 400.0
     assert v1.params() == __import__("dataclasses").replace(v2.params(), version=v1.version)   # 엔진 값 동일
+
+
+def test_spec_v3_differs_from_v2_only_in_maker_exit():
+    v2, v3 = Spec.load(SPEC_V2), Spec.load()
+    assert SPEC_PATH.name == "spec_v3.yaml" and v3.sha256.startswith(FROZEN_V3_SHA256)
+    assert v3.version == "pastofi-crypto-1.2" and v3.maker_exit_s == 5.0
+    assert v2.maker_exit_s is None and Spec.load(SPEC_V1).maker_exit_s is None
+    a, b = _flat(v2.raw), _flat(v3.raw)
+    diff = {k for k in a.keys() | b.keys() if a.get(k) != b.get(k)}
+    assert diff == {"version", "frozen_at", "engine.params.version", "exit.maker.before_s", "exit.maker.price"}
+    assert v2.params() == __import__("dataclasses").replace(v3.params(), version=v2.version)   # 엔진 값 동일 (익절·손절 포함)
+
+
+def test_maker_exit_spec_validation():
+    v3 = Spec.load()
+    bad = lambda **m: Spec({**v3.raw, "exit": {"maker": {**v3.raw["exit"]["maker"], **m}}}, "").maker_exit_s
+    with pytest.raises(SpecError, match="bid1"):
+        bad(price="ask1")
+    with pytest.raises(SpecError, match="hold"):
+        bad(before_s=300)
 
 
 def test_engine_copy_is_frozen():

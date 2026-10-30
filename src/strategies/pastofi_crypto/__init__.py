@@ -1,6 +1,6 @@
 """pastofi 코인판 로직1 — 5분 급등 뒤 1분 OFI 역방향이면 매도(숏), 익절 2%·손절 1%·최대 5분.
 
-스펙: spec_v2.yaml (pastofi-crypto-1.1, 동결. v1 은 수량 규칙만 달랐다). 페이퍼·라이브는 같은 코드 경로를 타고 브로커만 다르다.
+스펙: spec_v3.yaml (pastofi-crypto-1.2, 동결. v2 는 5분 청산이 시장가만, v1 은 수량 규칙도 달랐다). 페이퍼·라이브는 같은 코드 경로를 타고 브로커만 다르다.
 
 engine.py · params.py · tick.py 는 krx-hft 의 pastofi 패키지를 그대로 복사한 것이다 (krx-hft 를 import 하지 않는다).
     출처: ~/Desktop/krx-hft  커밋 a6d3d9b (pastofi-1.5) — engine.py 는 1.3(ce9652f)부터 같다.

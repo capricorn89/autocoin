@@ -1,0 +1,111 @@
+# pastofi 코인판 로직1 — 스펙 pastofi-crypto-1.2 (2026-10-30 동결)
+#
+# v2(pastofi-crypto-1.1) 과 다른 점 — 5분 청산 주문 방식만 (tests/test_pastofi_crypto_spec.py 가 차이를 고정한다):
+#   exit.maker: 마감(신호 T+300초) 5초 전에 그 시각 bid1 에 reduceOnly 매수 지정가(GTX post-only)를 한 번 건다.
+#     다 체결되면 그걸로 청산(메이커 0bp). 엔진 청산 판단(5분·익절·손절) 때 남아 있으면 취소하고 남은 수량만
+#     reduceOnly 시장가. 익절 200bp·손절 100bp·비상 손절·엔진 판단은 v2 그대로 (사용자 결정 2026-10-30)
+#   근거: 09-24 ~ 10-29 엔진 신호 84건 재생, 관통 체결 가정 N=5초 → 체결 56건, 합계 +$1.45 (명목 $80, 거래당 ≈ +2bp).
+#     N 3~60초 모두 플러스, 10-28 동시 신호 3건을 빼도 +$1.28. 30bp 지정가 익절(익절선을 바꿈)은 묶음 빼면 25·40bp 가 마이너스라 기각
+# 수량·신호·엔진·게이트·수수료·위험·라이브 계정 규칙은 v2 와 같다. 백테스트·진행 메모는 spec_v1.yaml 머리말 참고.
+#
+# 동결 규칙: 수정 금지. tests/test_pastofi_crypto_spec.py 가 sha256 을 고정한다. 바꾸려면 spec_v4.yaml 로 버전을 올린다.
+
+version: "pastofi-crypto-1.2"
+frozen_at: "2026-10-30"
+symbols: [BTCUSDT, ETHUSDT, SOLUSDT, EWYUSDT]     # Binance USDT-M 무기한. 신호·체결 같은 계약
+logics: ["로직1"]                                # 로직1(급등 뒤 매도)만. 로직2(급락 뒤 매수)는 하지 않는다
+
+engine:
+  source: "krx-hft a6d3d9b pastofi/engine.py (1.3 ce9652f 부터 같음)"
+  # 엔진 Params 전부 명시 (params.py 기본값은 KRX용 — 믿지 않는다). run_all.py 의 A 설정과 같다
+  params:
+    version: "pastofi-crypto-1.2"
+    move_win: 300          # past = ln mid(T-1) - ln mid(T-301)
+    move_bp: 70.0          # 급등 ≥ +70bp
+    ofi_win: 60            # OFI 합 (T-61, T-1]
+    vol_win: 600           # 거래량 (T-661, T-61] / 10 = 분당
+    ofi_th: 0.5            # 로직1: OFI ÷ 분당 거래량 < -0.5
+    guard: 1               # 판단에 T-1초까지만 쓴다
+    fut_limit_bp: 1.0e+9   # 가격제한 규칙 삭제 (KRX ±9.5%)
+    fut_min_rem: 0         # 잔량 필터 삭제
+    fut_gap_ticks: 1000000000   # 호가갭 필터 삭제 (신호·체결 같은 계약이라 갭 0)
+    skip_chain: 60         # 필터가 없으니 걸리지 않는다
+    vi_pad: 0              # VI·단일가 규칙 삭제
+    tp_bp: 200.0           # 익절: ask1 ≤ 진입가 × 0.98
+    sl_bp: 100.0           # 손절: ask1 ≥ 진입가 × 1.01
+    hold: 300              # 최대 보유 T+300초
+    cost_bp: 1.0           # 엔진 net_bp 계산용 (백테스트와 같게 둔다). 실제 손익은 브로커 체결·수수료로 계산한다
+    session_open: 0        # UTC 자정부터의 초
+    session_close: 86400
+    entry_start: 0
+    entry_end: 86100       # 86400 - 300. 판단 T ∈ [00:11:01, 23:55:00) — 워밍업 661초는 엔진이 스스로 건다
+  market: KOSPI            # 호가단위 표(갭 필터용) — 갭 필터가 꺼져 있어 무관
+  fut_base: first_mid      # 그날 첫 1호가 mid (가격제한 규칙이 꺼져 있어 값은 무관, 없으면 진입 안 하므로 넣는다)
+
+input:
+  # 수집기와 같은 소스: depth@100ms 로컬 오더북의 1호가가 바뀔 때마다 한 건, aggTrade(side = -1 if m else +1)
+  depth_speed: "100ms"
+  clock: exchange          # 호가 = depthUpdate T, 체결 = aggTrade T. UTC 자정부터의 초. UTC 날짜마다 엔진을 새로 만든다
+  qty_scale: 1000          # 호가 잔량·체결량 둘 다 ×1000 (엔진 on_trade 가 체결량을 정수로 자른다). 주문 수량과 무관
+  trade_aggregation: second_side   # (초, 방향)별 수량 합 → round(합 × 1000) — run_all.py 와 같다
+
+timing:
+  decision_delay_s: 0.3    # 초 T 판단은 거래소 시각 T+0.3초(시계 오프셋 보정한 벽시계)에. T-1까지 체결이 다 들어온 뒤
+  clock_offset_every_s: 600
+  max_clock_offset_ms: 5000    # 측정한 오프셋이 이보다 크면 신규 진입 안 함 (보정은 계속)
+
+gate:                      # 진입 직전 데이터 상태. 하나라도 걸리면 진입하지 않고 사유를 남긴다
+  max_depth_latency_ms: 1000   # 마지막 depth 이벤트 (수신 - E)
+  max_trade_latency_ms: 1000   # 마지막 aggTrade (수신 - E)
+  max_depth_silence_s: 5       # depth 이벤트가 이만큼 없으면 끊긴 것으로 본다
+  max_decision_lag_s: 1.0      # 판단이 예정(T+0.3초)보다 이만큼 늦으면 진입 안 함 (프로세스 멈춤 뒤 따라잡기)
+  gap_window_s: 662            # 피처 창(T-662, T] 안에 데이터 공백(프로세스 시작, WS 끊김, depth 재동기화,
+                               # aggTrade id 누락)이 있었으면 진입 안 함 — 창 안 체결량이 모자라 OFI 비율이 틀어진다
+
+sizing:                    # 사용자 확정 2026-10-29
+  # exchangeInfo LOT_SIZE stepSize·minQty 와 MIN_NOTIONAL 기준. 진입 시점 bid(진입 종목은 신호가) 로
+  #   종목별 최소 수량 = 명목 ≥ MIN_NOTIONAL × 1.1 인 가장 작은 step 배수
+  #   목표 명목 = 4종목 최소 수량 명목 중 최대 (지금은 BTC 0.001)
+  #   수량 = 목표 명목에 가장 가까운 step 배수 (자기 최소 수량 아래로는 내려가지 않는다)
+  rule: equal_notional
+  min_notional_mult: 1.1
+  max_qty:                 # 계산값이 넘으면 실행 거부 (예상치의 2배 — 2026-10-29 가격 기준, 목표 ≈ $81)
+    BTCUSDT: 0.002         # 예상 0.001 (~$81)
+    ETHUSDT: 0.070         # 예상 0.034 (~$81)
+    SOLUSDT: 1.60          # 예상 0.79 (~$81)
+    EWYUSDT: 1.00          # 예상 0.49 (~$81)
+
+exit:                      # 사용자 결정 2026-10-30 (v3 에서 추가)
+  maker:
+    before_s: 5              # 마감(deadline_epoch = 신호 T + hold) 이 초 전부터 매초 판정에서 한 번 건다
+    price: bid1              # 그 시각 최우선 매수호가. 정정하지 않는다
+    # GTX(post-only) + reduceOnly. 거절(즉시 체결될 가격)·실패면 걸지 않고 원래대로 시장가 청산
+    # 페이퍼 체결: 체결가가 지정가를 뚫고 지나가야 체결 (src/execution/paper.py — 같은 가격 체결은 치지 않는다)
+    # 엔진 청산 판단 때: 체결 확인 → 취소 → 남은 수량만 reduceOnly 시장가. 사유에 (메이커)·(메이커 일부) 를 붙인다
+
+fees_bps: {maker: 0.0, taker: 4.0}   # commissionRate 2026-09-29 조회 (overnight). 라이브는 시작 시 다시 조회해 기록
+
+risk:                      # 사용자 확정 2026-10-26, 정지선만 2026-10-29. 페이퍼·라이브 누적은 따로 센다
+  stop_cumulative_usd: -15.0       # 실현 손익(수수료 포함) 누적이 이 값 이하 → 신규 진입 중단(청산은 규칙대로), 재개는 수동
+  max_entries_per_symbol_day: 10   # UTC 날짜 기준. 넘는 신호는 건너뛰고 사유 기록
+  max_consecutive_rejects: 3       # 한 종목 주문 거부가 이만큼 이어지면 그 종목 halted (RiskGuard)
+
+paper:
+  start_balance_usd: 400.0   # 가정
+  leverage: 1
+  margin_type: ISOLATED
+  fill: "시장가 = 반대편 5호가 VWAP (5호가 초과분은 최악 호가)"
+  trial_days: 7              # 7일 뒤 자동으로 멈추지 않는다. 요약만 알린다
+
+live:
+  account:                   # 4종목 모두. 다르면 실행 거부
+    margin_type: ISOLATED
+    leverage: 1
+    multi_assets_margin: false
+    dual_side_position: false
+  client_id_prefix: "pof-"    # pof-<종목3>-<YYYYMMDD>-<T>-<다리><n>  다리: e 진입 · x 청산 · s 비상손절
+  emergency_stop_pct: 1.5     # 진입 체결가 +1.5% STOP_MARKET closePosition (MARK_PRICE). 정상 손절 1%는 소프트웨어가 ask1로 판정
+  refuse_if_agents: ["com.autocoin.overnight.live"]
+
+alerts:
+  ws_outage_s: 180           # WS 끊김(메시지 없음)이 이만큼 이어지면 알림

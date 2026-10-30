@@ -1,6 +1,6 @@
 """스펙 로드 + 엔진 파라미터 + 수량 규칙.
 
-스펙 파일은 동결본이다 (지금 실행은 spec_v2.yaml). 여기서는 읽고 계산만 한다.
+스펙 파일은 동결본이다 (지금 실행은 spec_v3.yaml). 여기서는 읽고 계산만 한다.
 
     python -m src.strategies.pastofi_crypto.spec            # 스펙 요약 + 지금 가격 기준 수량
 """
@@ -18,7 +18,8 @@ from .engine import LOGIC1, SymbolEngine
 from .params import DEFAULT, Params
 
 SPEC_V1 = Path(__file__).with_name("spec_v1.yaml")
-SPEC_PATH = Path(__file__).with_name("spec_v2.yaml")     # 지금 실행 스펙
+SPEC_V2 = Path(__file__).with_name("spec_v2.yaml")
+SPEC_PATH = Path(__file__).with_name("spec_v3.yaml")     # 지금 실행 스펙
 
 
 class SpecError(RuntimeError):
@@ -74,6 +75,19 @@ class Spec:
         if rule not in ("min_notional", "equal_notional"):
             raise SpecError(f"알 수 없는 sizing.rule: {rule}")
         return rule
+
+    @property
+    def maker_exit_s(self) -> float | None:
+        """마감 몇 초 전에 bid1 메이커 청산을 거나 (v3). 없으면 None — v1·v2 는 시장가 청산만."""
+        m = (self.raw.get("exit") or {}).get("maker")
+        if not m:
+            return None
+        if m.get("price") != "bid1":
+            raise SpecError(f"exit.maker.price 는 bid1 만 지원한다: {m.get('price')}")
+        s = float(m["before_s"])
+        if not 0 < s < self.params().hold:
+            raise SpecError(f"exit.maker.before_s 는 0 초과 hold 미만이어야 한다: {s}")
+        return s
 
 
 # ---------------------------------------------------------------- 수량

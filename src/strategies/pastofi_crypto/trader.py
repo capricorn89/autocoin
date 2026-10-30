@@ -2,7 +2,8 @@
 
 흐름
     엔진 로직1 진입 판단(Signal) → 한도·데이터 게이트 → 시장가 매도 → 비상 손절(STOP_MARKET +1.5%) → 보유
-    엔진 로직1 청산 판단(Exit) → reduceOnly 시장가 매수 → 비상 손절 취소 → 손익 확정 → 정지선 판정
+    (v3) 마감 N초 전 → bid1 에 reduceOnly GTX 매수 지정가 (매초 체결 확인, 다 체결되면 그걸로 청산)
+    엔진 로직1 청산 판단(Exit) → (메이커 주문 취소) → 남은 수량 reduceOnly 시장가 매수 → 비상 손절 취소 → 손익 확정 → 정지선 판정
 게이트에 걸려 건너뛴 신호도 엔진은 계속 돌아 가상 결과가 signals 에 남는다 (매일 대조가 거래 단위로 맞는다).
 
 주문은 종목마다 작업 스레드 하나(submit)에서 차례로 실행한다 — 라이브 REST 호출이 WS 처리·다른 종목 판단을 막지 않게.
@@ -102,6 +103,7 @@ class Trader:
         self.stop_line = float(spec.raw["risk"]["stop_cumulative_usd"])
         self.taker_bps = float(spec.raw["fees_bps"]["taker"])
         self.p = spec.params()
+        self.maker_s = spec.maker_exit_s                 # None 이면 시장가 청산만 (v1·v2)
         self.estop_pct = float(spec.raw["live"]["emergency_stop_pct"])
         self.start_balance = float(spec.raw["paper"]["start_balance_usd"])
         t0 = now()
@@ -144,7 +146,7 @@ class Trader:
             log.exception("알림 실패")
 
     def _cid(self, sym: str, sig_epoch: int, leg: str, n: int = 0) -> str:
-        """pof-<종목3>-<YYYYMMDD>-<T>-<다리><n>  (다리: e 진입 · x 청산 · s 비상손절). 36자 이내."""
+        """pof-<종목3>-<YYYYMMDD>-<T>-<다리><n>  (다리: e 진입 · x 청산 · m 메이커 청산 · s 비상손절). 36자 이내."""
         d, T = divmod(int(sig_epoch), DAY)
         return f"{self.prefix}{SHORT.get(sym, sym[:3])}-{_dt(d * DAY):%Y%m%d}-{T}-{leg}{n}"
 
@@ -330,28 +332,101 @@ class Trader:
             n = pos.get("exit_n", 0)
             cid = self._cid(sym, ep, "x", n)
             qty = pos["qty"]
+            maker_cid = pos.get("maker_cid")
             self._save()
+        mfills = self._close_maker(sym, maker_cid) if maker_cid else []
+        mq = round(sum(f.qty for f in mfills), 8)
+        if mfills and mq >= qty - 1e-9:                   # 메이커가 다 체결됐다
+            self._cancel_stop(sym)
+            self._finalize(sym, sum(f.qty * f.price for f in mfills) / mq, sum(f.fee for f in mfills),
+                           req["reason"] + "(메이커)", req.get("assumed_out"), maker_cid)
+            return
         try:
-            o = guard.place_market(Side.BUY, qty, cid, reduce_only=True)
+            o = guard.place_market(Side.BUY, round(qty - mq, 8), cid, reduce_only=True)
         except Exception as e:
             self._exit_failed(sym, f"{type(e).__name__}: {str(e)[:160]}")
             return
         fills = [f for f in guard.fills() if f.client_id == cid]
-        if o.status is Status.EXPIRED and not fills:      # reduceOnly 거절 = 거래소에 포지션이 없다
+        if o.status is Status.EXPIRED and not fills and not mfills:   # reduceOnly 거절 = 거래소에 포지션이 없다
             if self._check_stop(sym, force=True):
                 return
             self._finalize(sym, pos["entry_px"], 0.0, req["reason"] + "(포지션 없음)", req.get("assumed_out"), cid,
                            note="⚠️ 청산하려는데 포지션이 없었습니다. 거래소를 확인해 주세요.")
             guard.halt(f"{sym} 청산 시점에 포지션 없음")
             return
-        if o.status is not Status.FILLED and not fills:
+        if o.status is not Status.FILLED and not fills and not mfills:
             self._exit_failed(sym, f"{o.status.value} {o.reason}")
             return
         fq = sum(f.qty for f in fills) or o.filled_qty
         fpx = (sum(f.qty * f.price for f in fills) / fq) if fills else o.avg_price
         fee = sum(f.fee for f in fills) if fills else fq * fpx * self.taker_bps / 1e4
+        if mfills:                                        # 메이커 일부 + 시장가 나머지 → 합쳐 VWAP
+            fpx = (fpx * fq + sum(f.qty * f.price for f in mfills)) / (fq + mq)
+            fee += sum(f.fee for f in mfills)
         self._cancel_stop(sym)
-        self._finalize(sym, fpx, fee, req["reason"], req.get("assumed_out"), cid)
+        self._finalize(sym, fpx, fee, req["reason"] + ("(메이커 일부)" if mfills else ""), req.get("assumed_out"), cid)
+
+    # ------------------------------------------------------------ 메이커 청산 (v3)
+    def _place_maker(self, sym: str, ep: int) -> None:
+        """마감 N초 전: bid1 에 reduceOnly GTX 매수. 거절·실패면 걸지 않는다 (엔진 청산 때 시장가)."""
+        guard = self.brokers[sym]
+        with self.lock:
+            pos = self.state.positions.get(sym)
+            if not pos or pos["t_sig_epoch"] != ep or pos["status"] != "open" or pos.get("exit_req") or pos.get("maker_cid"):
+                return
+            qty = pos["qty"]
+        q = self.quote(sym)
+        if not q or not q[0]:
+            self.store.event({"event": "maker_skip", "symbol": sym, "t_sig": ep, "reason": "호가 없음"})
+            return
+        cid = self._cid(sym, ep, "m")
+        try:
+            o = guard.place_limit_gtx(Side.BUY, qty, q[0], cid, reduce_only=True)
+        except Exception as e:
+            self.store.event({"event": "maker_skip", "symbol": sym, "t_sig": ep, "reason": f"{type(e).__name__}: {str(e)[:120]}"})
+            log.warning("%s 메이커 청산 주문 실패: %s", sym, e)
+            return
+        if not o.status.is_open and o.status is not Status.FILLED:
+            self.store.event({"event": "maker_skip", "symbol": sym, "t_sig": ep, "reason": f"{o.status.value} {o.reason}"})
+            return
+        with self.lock:
+            pos = self.state.positions.get(sym)
+            if pos and pos["t_sig_epoch"] == ep:
+                pos.update(maker_cid=cid, maker_px=o.price, maker_ts=self.now())
+                self._save()
+        self.store.event({"event": "maker_placed", "symbol": sym, "t_sig": ep, "price": o.price, "qty": qty, "cid": cid})
+
+    def _poll_maker(self, sym: str, ep: int) -> None:
+        """대기 중 메이커 청산이 다 체결됐으면 그걸로 손익 확정. 일부 체결은 엔진 청산 때 나머지를 시장가로."""
+        guard = self.brokers[sym]
+        with self.lock:
+            pos = self.state.positions.get(sym)
+            if not pos or pos["t_sig_epoch"] != ep or pos["status"] != "open" or not pos.get("maker_cid"):
+                return
+            cid, qty = pos["maker_cid"], pos["qty"]
+        try:
+            guard.poll()
+        except Exception as e:
+            log.warning("%s 메이커 청산 상태 조회 실패: %s", sym, e)
+            return
+        fills = [f for f in guard.fills() if f.client_id == cid]
+        fq = round(sum(f.qty for f in fills), 8)
+        if not fills or fq < qty - 1e-9:
+            return
+        self._cancel_stop(sym)
+        self._finalize(sym, sum(f.qty * f.price for f in fills) / fq, sum(f.fee for f in fills), "5분(메이커)", None, cid)
+
+    def _close_maker(self, sym: str, cid: str) -> list:
+        """메이커 주문을 정리하고 그 체결 목록. 체결 확인 → 취소 → 다시 확인 (취소 직전 체결까지 잡는다)."""
+        guard = self.brokers[sym]
+        for step in ("poll", "cancel", "poll"):
+            try:
+                guard.poll() if step == "poll" else guard.cancel(cid)
+            except (OrderRejected, KeyError):
+                pass                                      # 이미 체결·취소됐다
+            except Exception as e:
+                self.alert(f"{sym} 메이커 청산 주문 정리 실패({step}) — {str(e)[:160]}. 남은 수량은 reduceOnly 로 청산합니다.")
+        return [f for f in guard.fills() if f.client_id == cid]
 
     def _exit_failed(self, sym: str, why: str) -> None:
         with self.lock:
@@ -430,7 +505,8 @@ class Trader:
                      "assumed_bp": assumed_bp, "slip_in_bp": pos.get("slip_in_bp"), "slip_out_bp": slip_out,
                      "past_bp": pos.get("past_bp"), "ofi_ratio": pos.get("ofi_ratio"),
                      "entry_cid": pos.get("entry_cid"), "exit_cid": exit_cid, "spec_version": self.spec.version,
-                     "source": pos.get("source"), "fee_estimated": pos.get("fee_estimated", False)}
+                     "source": pos.get("source"), "fee_estimated": pos.get("fee_estimated", False),
+                     "maker_px": pos.get("maker_px")}
             hit = (not st.halted) and st.cum_net <= self.stop_line
             if hit:
                 st.halted, st.halt_reason, st.halt_since = True, f"누적 실현 {money(st.cum_net)} ≤ {money(self.stop_line)}", now
@@ -461,6 +537,14 @@ class Trader:
                 pos["exit_retry_at"] = now + 5.0
                 self._submit(sym, lambda s=sym, e=ep: self._do_exit(s, e))
                 continue
+            if self.maker_s and pos.get("source") == "engine" and not pos.get("exit_req"):
+                if pos.get("maker_cid"):
+                    self._submit(sym, lambda s=sym, e=ep: self._poll_maker(s, e))
+                elif not pos.get("maker_tried") and pos["deadline_epoch"] - self.maker_s <= now < pos["deadline_epoch"]:
+                    with self.lock:
+                        pos["maker_tried"] = True                # 한 번만 건다 (거절·실패여도 다시 걸지 않는다)
+                        self._save()
+                    self._submit(sym, lambda s=sym, e=ep: self._place_maker(s, e))
             if pos.get("source") == "recovered" or now > pos["deadline_epoch"] + 10:
                 why = self._soft_exit(sym, pos, now)
                 if why:

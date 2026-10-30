@@ -1,7 +1,10 @@
 # pastofi 코인판 로직1 (WOO-104~106, Linear P-WOO-9)
 
 5분 +70bp 급등 뒤 1분 OFI ÷ 분당 거래량 < −0.5 → 숏 시장가, 익절 2% · 손절 1%(ask1 판정) · 최대 5분.
-BTCUSDT · ETHUSDT · SOLUSDT · EWYUSDT (USDT-M 무기한). 스펙 `spec_v2.yaml` (pastofi-crypto-1.1, sha256 동결 — v1 에서 수량만 바꿨다: 4종목 진입 명목을 BTC 0.001 ≈ $81 에 맞춘다).
+BTCUSDT · ETHUSDT · SOLUSDT · EWYUSDT (USDT-M 무기한). 스펙 `spec_v3.yaml` (pastofi-crypto-1.2, sha256 동결).
+v2 에서 5분 청산 방식만 바꿨다: 마감 5초 전 bid1 에 reduceOnly GTX 매수 지정가, 다 체결되면 메이커(0bp)로 청산,
+엔진 청산 판단 때 남아 있으면 취소하고 남은 수량만 시장가 (사유 `5분(메이커)` · `5분(메이커 일부)` · `5분`).
+v2 는 수량(4종목 진입 명목을 BTC 0.001 ≈ $81 에 맞춤), v1 은 종목별 최소 명목.
 
 진행 (사용자 결정 2026-10-26): **페이퍼 7일 → 사용자 확인 → 라이브(별도 지시)**. 페이퍼 시작 2026-10-26 04:21 UTC.
 

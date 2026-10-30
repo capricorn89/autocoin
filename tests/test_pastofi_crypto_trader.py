@@ -10,7 +10,7 @@ from src.strategies.pastofi_crypto.brokers import LiveMarketView
 from src.strategies.pastofi_crypto.engine import LOGIC1, Trade
 from src.strategies.pastofi_crypto.feed import DAY, Exit, Signal
 from src.strategies.pastofi_crypto.runner import _risk_guard
-from src.strategies.pastofi_crypto.spec import SPEC_V1, Spec, SpecError, SymbolFilters, order_qty, sized
+from src.strategies.pastofi_crypto.spec import SPEC_V1, SPEC_V2, Spec, SpecError, SymbolFilters, order_qty, sized
 from src.strategies.pastofi_crypto.store import Store
 from src.strategies.pastofi_crypto.trader import StartRefused, Trader
 
@@ -28,7 +28,12 @@ def spec():
 
 @pytest.fixture(scope="module")
 def spec2():
-    return Spec.load()
+    return Spec.load(SPEC_V2)
+
+
+@pytest.fixture(scope="module")
+def spec3():
+    return Spec.load()               # 지금 스펙 (v3: 마감 5초 전 메이커 청산)
 
 
 def test_sizing_matches_user_table(spec):
@@ -240,3 +245,74 @@ def test_equal_notional_entry_uses_other_symbols_bids(spec2, tmp_path):
     assert env.trader.state.positions["EWYUSDT"] is None
     s = [x for x in env.store.signals() if x["symbol"] == "EWYUSDT"][-1]
     assert s["status"] == "skipped" and s["skip_reason"] == "시세 없음 (수량 계산)"
+
+
+# ---------------------------------------------------------------- 메이커 청산 (v3)
+def maker_env(spec, tmp_path):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    env = Env(spec, tmp_path)
+    ms = int(env.t() * 1000)
+    for s_, px in PRICES.items():
+        book(env.views[s_], px, px + FILTERS[s_].tick, ms)
+    env.trader.on_entry(env.signal("SOLUSDT", p_in=PRICES["SOLUSDT"]))
+    return env, env.trader.state.positions["SOLUSDT"]
+
+
+def wall_trade(view, price, a=1):
+    import time
+    view.on_trade({"T": int((time.time() + 5) * 1000), "a": a, "p": str(price), "q": "5", "m": True})   # PaperExchange 는 벽시계
+
+
+def test_maker_exit_full_fill_books_zero_exit_fee(spec3, tmp_path):
+    env, pos = maker_env(spec3, tmp_path)
+    deadline = pos["deadline_epoch"]
+    env.t.t = deadline - 6
+    env.trader.periodic()
+    assert not pos.get("maker_cid")                                    # 5초 전보다 이르면 안 건다
+    book(env.views["SOLUSDT"], 101.5, 101.51, int(env.t() * 1000))
+    env.t.t = deadline - 4.7
+    env.trader.periodic()
+    o = env.ex["SOLUSDT"].get_order(pos["maker_cid"])
+    assert pos["maker_cid"] == "pof-SOL-20261026-3600-m0" and o.price == 101.5 and o.reduce_only and o.status.is_open
+    wall_trade(env.views["SOLUSDT"], 101.5)                            # 같은 가격 체결은 체결로 치지 않는다
+    env.trader.periodic()
+    assert env.trader.state.positions["SOLUSDT"] is not None
+    wall_trade(env.views["SOLUSDT"], 101.49, a=2)                      # 뚫고 지나가야 체결
+    env.trader.periodic()
+    assert env.trader.state.positions["SOLUSDT"] is None
+    assert env.ex["SOLUSDT"].position().qty == pytest.approx(0)
+    assert not env.ex["SOLUSDT"].get_order(pos["stop_cid"]).status.is_open
+    tr = env.store.trades()[-1]
+    assert tr["reason"] == "5분(메이커)" and tr["exit_px"] == 101.5 and tr["maker_px"] == 101.5
+    assert tr["fees_usd"] == pytest.approx(pos["entry_fee"])           # 청산 수수료 0
+    env.t.t = deadline + 0.3
+    env.trader.on_exit(env.exit(p_out=101.6))                           # 엔진 청산 판단은 신호 기록만 남긴다
+    assert len(env.store.trades()) == 1
+
+
+def test_maker_exit_unfilled_cancels_then_market(spec3, tmp_path):
+    env, pos = maker_env(spec3, tmp_path)
+    book(env.views["SOLUSDT"], 101.5, 101.51, int(env.t() * 1000))
+    env.t.t = pos["deadline_epoch"] - 4.7
+    env.trader.periodic()
+    env.trader.periodic()                                               # 두 번째 판정은 다시 걸지 않는다 (체결 확인만)
+    cid = pos["maker_cid"]
+    assert [o.client_id for o in env.ex["SOLUSDT"].open_orders() if o.type.value == "LIMIT"] == [cid]
+    book(env.views["SOLUSDT"], 101.6, 101.61, int(env.t() * 1000) + 5000)   # 위로 가서 미체결
+    env.t.t = pos["deadline_epoch"] + 0.3
+    env.trader.on_exit(env.exit(p_out=101.61))
+    assert env.ex["SOLUSDT"].get_order(cid).status.value == "CANCELED"
+    assert env.ex["SOLUSDT"].position().qty == pytest.approx(0)
+    tr = env.store.trades()[-1]
+    assert tr["reason"] == "5분" and tr["exit_px"] == pytest.approx(101.61)
+    assert tr["fees_usd"] == pytest.approx(pos["entry_fee"] + pos["qty"] * 101.61 * 4e-4)
+
+
+def test_maker_exit_not_placed_before_window_or_in_v2(spec2, spec3, tmp_path):
+    env, pos = maker_env(spec3, tmp_path / "v3")
+    env.trader.on_exit(env.exit(p_out=95.0, reason="익절"))             # 창 전에 엔진이 청산 → 메이커 없음
+    assert env.store.trades()[-1]["reason"] == "익절" and not env.ex["SOLUSDT"].open_orders()
+    env, pos = maker_env(spec2, tmp_path / "v2")
+    env.t.t = pos["deadline_epoch"] - 3
+    env.trader.periodic()
+    assert not pos.get("maker_cid") and not pos.get("maker_tried")
