@@ -43,13 +43,23 @@ def _epoch(x):
     return x
 
 
+def ledger_version(mode: str, root: Path = STATE_ROOT) -> str | None:
+    """그 모드 장부(state.json)의 스펙 버전. 거래 목록은 이 버전만 보여 준다 (지난 버전 장부는 paper-v2/ 등에 보관)."""
+    try:
+        return json.loads((root / mode / "state.json").read_text()).get("spec_version")
+    except (OSError, ValueError):
+        return None
+
+
 def trades(mode: str, root: Path = STATE_ROOT) -> list[dict]:
+    ver = ledger_version(mode, root)
     try:
         import psycopg
         from ...storage.db import get_dsn
         with psycopg.connect(get_dsn(None), connect_timeout=3) as conn:
             cols = ", ".join("detail->>'source'" if k == "source" else k for k in TRADE_FIELDS)   # source 는 detail 안에 있다 (store.py)
-            cur = conn.execute(f"SELECT {cols} FROM exec.pastofi_trades WHERE mode = %s ORDER BY t_sig", (mode,))
+            cur = conn.execute(f"SELECT {cols} FROM exec.pastofi_trades WHERE mode = %s AND (%s::text IS NULL OR spec_version = %s) "
+                               "ORDER BY t_sig", (mode, ver, ver))
             rows = [dict(zip(TRADE_FIELDS, r)) for r in cur.fetchall()]
         for r in rows:
             for k in ("t_sig", "entry_ts", "exit_ts"):
@@ -58,7 +68,7 @@ def trades(mode: str, root: Path = STATE_ROOT) -> list[dict]:
         return rows
     except Exception as e:
         log.warning("DB 읽기 실패 — jsonl 로 대신: %s", str(e).splitlines()[0][:120])
-        rows = read_jsonl(root / mode / "trades.jsonl", ("trade_id",))
+        rows = [r for r in read_jsonl(root / mode / "trades.jsonl", ("trade_id",)) if ver is None or r.get("spec_version") == ver]
         return sorted(({k: r.get(k) for k in TRADE_FIELDS} for r in rows), key=lambda r: r["t_sig"])
 
 
